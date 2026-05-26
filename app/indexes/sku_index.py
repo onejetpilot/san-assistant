@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from pydantic import BaseModel
 
@@ -18,6 +19,7 @@ class SkuRecord(BaseModel):
     source_file: str
     short_description: str = ''
     related_articles: list[str] = []
+    kit_components: list[str] = []
     matched_from: str = 'ARTICLES'
 
 
@@ -46,8 +48,12 @@ def build_sku_index(docs: list[ParsedRagDocument]) -> SkuIndex:
     for doc in docs:
         desc = (doc.sections.get('DESCRIPTION').content if doc.sections.get('DESCRIPTION') else '')[:240]
         related = [a.original for a in doc.articles]
+        variants_text = doc.sections.get('VARIANTS (АРТИКУЛЫ)').content if doc.sections.get('VARIANTS (АРТИКУЛЫ)') else ''
+        variants_map = _extract_variant_lines(variants_text)
         for a in doc.articles:
             norm = normalize_article(a.original)
+            variant_desc = variants_map.get(norm, '')
+            kit_components = _extract_kit_components(variant_desc)
             data[norm] = SkuRecord(
                 article=a.original,
                 product=doc.product,
@@ -58,6 +64,41 @@ def build_sku_index(docs: list[ParsedRagDocument]) -> SkuIndex:
                 source_file=doc.source_file,
                 short_description=desc,
                 related_articles=[x for x in related if normalize_article(x) != norm][:10],
+                kit_components=kit_components,
                 matched_from='ARTICLES',
             ).model_dump()
     return SkuIndex(data)
+
+
+def _extract_variant_lines(text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        line = line.lstrip('-').strip()
+        m = re.match(r'^([A-Za-zА-Яа-я0-9._\-/]+)\s*[-—:]\s*(.+)$', line)
+        if not m:
+            continue
+        article, desc = m.group(1).strip(), m.group(2).strip()
+        out[normalize_article(article)] = desc
+    return out
+
+
+def _extract_kit_components(variant_desc: str) -> list[str]:
+    if not variant_desc:
+        return []
+    parts: list[str] = []
+    for chunk in variant_desc.split('+'):
+        token = chunk.strip()
+        if not token:
+            continue
+        # Keep readable kit part strings like: "1 шт OXF02012"
+        m = re.search(r'(\d+\s*шт\.?\s*[A-Za-zА-Яа-я0-9._\-/]+)', token, flags=re.IGNORECASE)
+        if m:
+            parts.append(re.sub(r'\s+', ' ', m.group(1)).strip())
+            continue
+        art = re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})', token)
+        if art:
+            parts.append(art.group(1))
+    return parts

@@ -11,6 +11,7 @@ from app.rag.validate_knowledge_base import validate_knowledge_base
 from app.rag.parser import parse_rag_file
 from app.rag.chunker import build_chunks
 from app.indexes.sku_index import build_sku_index
+from app.indexes.kit_index import build_kit_index
 from app.indexes.product_card_index import build_product_cards, upsert_product_cards
 from app.storage.db import SessionLocal
 from app.storage.models import IngestionRun
@@ -42,6 +43,7 @@ def run(recreate: bool = False) -> None:
 
     cards = build_product_cards(docs)
     sku = build_sku_index(docs)
+    kits = build_kit_index(docs)
 
     client = get_chroma_client()
     if recreate:
@@ -62,6 +64,7 @@ def run(recreate: bool = False) -> None:
 
     upsert_product_cards(cards, recreate=recreate)
     sku.save('/data/indexes/sku_index.json')
+    kits.save('/data/indexes/kit_index.json')
 
     index_version = f"rag-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
     session = SessionLocal()

@@ -7,6 +7,7 @@ from app.core.llm_client import OpenAICompatibleLLMClient
 from app.core.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.documents.document_search import DocumentSearch
 from app.indexes.sku_index import SkuIndex
+from app.indexes.kit_index import KitIndex
 from app.rag.retriever import RagRetriever
 from app.services.confidence import compute_confidence
 from app.services.conversation_memory import ConversationMemoryService
@@ -32,6 +33,9 @@ class AnswerService:
         self.sku = SkuIndex.load('/data/indexes/sku_index.json')
         if not self.sku.data:
             self.sku = SkuIndex.load('./data/indexes/sku_index.json')
+        self.kits = KitIndex.load('/data/indexes/kit_index.json')
+        if not self.kits.data:
+            self.kits = KitIndex.load('./data/indexes/kit_index.json')
         self.llm = OpenAICompatibleLLMClient()
         self.web = SanTeamSearch()
         self.memory = ConversationMemoryService()
@@ -139,6 +143,43 @@ class AnswerService:
 
         # LLM fallback-safe answer
         answer = ''
+        composition_keywords = (
+            'из чего состоит',
+            'состав',
+            'что входит',
+            'комплект',
+            'в наборе',
+        )
+        asks_composition = any(k in ql for k in composition_keywords)
+        if article:
+            kit_from_global = self.kits.lookup(article)
+        else:
+            kit_from_global = None
+        kit_components = sku_result.kit_components if sku_result and sku_result.kit_components else []
+        if not kit_components and kit_from_global:
+            kit_components = kit_from_global.components
+
+        if (sku_result or kit_from_global) and kit_components and (asks_composition or intent == 'article_lookup'):
+            base_article = sku_result.article if sku_result else kit_from_global.kit_article
+            lines = []
+            described_components: list[str] = []
+            component_articles = kit_from_global.component_articles if kit_from_global else []
+            if not component_articles and sku_result:
+                component_articles = [
+                    re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', c).group(1)
+                    for c in kit_components
+                    if re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', c)
+                ]
+            for component_article in component_articles:
+                row = self.sku.lookup(component_article)
+                if row:
+                    described_components.append(f"{row.article} — {row.product}")
+            lines.append(f"Состав комплекта {base_article}: " + '; '.join(kit_components) + '.')
+            if described_components:
+                lines.append("Компоненты:")
+                lines.extend([f"- {x}" for x in described_components])
+            answer = '\n'.join(lines)
+
         if comparison_block:
             answer = (
                 'Сравнение:\n'
