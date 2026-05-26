@@ -1,29 +1,54 @@
 name: deploy
+
 on:
   push:
     branches: [main]
   workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: true
+
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
       - name: Deploy via SSH
         uses: appleboy/ssh-action@v1.2.0
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          APP_ACCESS_TOKEN: ${{ secrets.APP_ACCESS_TOKEN }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_KEY }}
+          envs: APP_BASE_URL,APP_ACCESS_TOKEN
           script: |
-            set -e
+            set -euo pipefail
             cd /opt/san-assistant
-            git pull origin main
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml build
-            docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
-            curl -f http://localhost:8000/api/health
-            RESPONSE=$(curl -s -X POST http://localhost:8000/api/chat -H 'Content-Type: application/json' -d '{"session_id":null,"message":"Что за OXF01612?","answer_style":"short"}')
-            export RESPONSE
-            python3 - << 'PY'
-import json, os
-resp = json.loads(os.getenv('RESPONSE', '{}'))
-assert resp.get('answer'), 'empty answer'
-PY
+            if [ -x ./scripts/deploy_server.sh ]; then
+              ./scripts/deploy_server.sh
+            else
+              git fetch origin main
+              git reset --hard origin/main
+              mkdir -p /opt/san-assistant-data
+              docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+              docker compose -f docker-compose.yml -f docker-compose.prod.yml build
+              docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+              curl -f http://localhost:8000/api/health
+            fi
+
+            BASE_URL="${APP_BASE_URL:-http://localhost:8000}"
+            TOKEN="${APP_ACCESS_TOKEN:-}"
+
+            if [ -x ./scripts/smoke_health.sh ]; then
+              ./scripts/smoke_health.sh "$BASE_URL"
+            else
+              curl -f "$BASE_URL/api/health"
+            fi
+
+            if [ -x ./scripts/smoke_chat.sh ]; then
+              ./scripts/smoke_chat.sh "$BASE_URL" "$TOKEN"
+            fi

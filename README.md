@@ -1,103 +1,90 @@
 # SAN Assistant (Server-Only Deployment)
 
-В этом проекте поддерживается только серверный запуск.
-Локальный dev-режим, `docker-compose.local.yml` и `.env.local.example` не используются.
+Проект рассчитан только на server-only запуск на VPS.
 
-## Production структура на сервере
-- `/opt/san-assistant` — основное приложение
-- `/opt/san-assistant-kb` — база знаний (`knowledge_base/*.txt`)
-- `/opt/san-assistant-docs` — документы (`documents/`) и metadata (`metadata/documents.yml`)
-- `/opt/san-assistant-data` — persistent data (`/data`: Chroma, SQLite, indexes, логи)
+## Репозитории
+- `onejetpilot/san-assistant`
+- `onejetpilot/san-assistant-kb`
+- `onejetpilot/san-assistant-docs`
 
-## Подготовка VPS
-1. Установите Docker Engine и Docker Compose plugin.
-2. Создайте директории:
-   - `mkdir -p /opt/san-assistant /opt/san-assistant-kb /opt/san-assistant-docs /opt/san-assistant-data`
-3. Клонируйте репозитории:
-   - `git clone https://github.com/onejetpilot/san-assistant /opt/san-assistant`
-   - `git clone https://github.com/onejetpilot/san-assistant-kb /opt/san-assistant-kb`
-   - `git clone https://github.com/onejetpilot/san-assistant-docs /opt/san-assistant-docs`
+## Серверная структура
+- `/opt/san-assistant`
+- `/opt/san-assistant-kb`
+- `/opt/san-assistant-docs`
+- `/opt/san-assistant-data`
 
-## Настройка `.env`
-В `/opt/san-assistant/.env` используйте container paths:
+## Container paths
 - `KNOWLEDGE_BASE_PATH=/kb/knowledge_base`
 - `DOCUMENTS_REPO_PATH=/docs`
 - `DOCUMENTS_METADATA_PATH=/docs/metadata/documents.yml`
 - `CHROMA_PATH=/data/chroma`
 - `DATABASE_URL=sqlite:////data/app.db`
 
-Остальные переменные смотрите в `.env.example`.
+## CI/CD
+### Workflows by repository
+- `san-assistant/.github/workflows/ci.yml`
+- `san-assistant/.github/workflows/deploy.yml`
+- `san-assistant-kb/.github/workflows/validate_and_reindex.yml` (template in this repo)
+- `san-assistant-docs/.github/workflows/validate_and_reindex_documents.yml` (template in this repo)
 
-## Docker Compose запуск
-`docker-compose.prod.yml` монтирует:
-- `/opt/san-assistant-kb:/kb:ro`
-- `/opt/san-assistant-docs:/docs:ro`
-- `/opt/san-assistant-data:/data`
+### Required secrets
+Add in each repo: `Settings -> Secrets and variables -> Actions`.
 
-Запуск:
-```bash
-cd /opt/san-assistant
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
-```
-
-Проверка:
-```bash
-curl -f http://localhost:8000/api/health
-```
-
-## Переиндексация
-RAG KB:
-```bash
-cd /opt/san-assistant
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend python -m app.rag.ingest --recreate
-```
-
-Documents:
-```bash
-cd /opt/san-assistant
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec backend python -m app.indexes.document_index --recreate
-```
-
-## Reverse proxy (Caddy/Nginx) и HTTPS
-1. Поднимите reverse proxy на сервере.
-2. Проксируйте:
-   - frontend: `localhost:3000`
-   - backend API: `localhost:8000`
-3. Включите TLS (Let's Encrypt) на боевом домене.
-
-## GitHub Actions deploy
-Workflow `deploy.yml`:
-- `cd /opt/san-assistant`
-- `git pull`
-- `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build`
-- smoke tests (`/api/health` + `/api/chat`)
-
-Нужны secrets:
+Common:
 - `SSH_HOST`
 - `SSH_USER`
 - `SSH_KEY`
 
-## GitHub Actions reindex
-`reindex_knowledge.yml`:
-- `cd /opt/san-assistant-kb && git pull`
-- `cd /opt/san-assistant && docker compose ... exec backend python -m app.rag.ingest --recreate`
+Optional:
+- `APP_ACCESS_TOKEN`
+- `ADMIN_TOKEN`
+- `APP_BASE_URL`
 
-`reindex_documents.yml`:
-- `cd /opt/san-assistant-docs && git pull`
-- `cd /opt/san-assistant && docker compose ... exec backend python -m app.indexes.document_index --recreate`
-
-## Systemd (опционально)
-Файл: `infra/systemd/san-rag-web.service`
-
-Установка:
+### SSH deploy key
 ```bash
-sudo cp infra/systemd/san-rag-web.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable san-rag-web
-sudo systemctl start san-rag-web
+ssh-keygen -t ed25519 -C "github-actions-san-assistant" -f ~/.ssh/san_assistant_deploy
+```
+- private key -> GitHub Secret `SSH_KEY`
+- public key -> server `~/.ssh/authorized_keys`
+
+## Bootstrap VPS
+```bash
+cd /opt/san-assistant
+./scripts/server_bootstrap.sh
 ```
 
-Логи:
+Then clone repos into `/opt/*`, create `/opt/san-assistant/.env`, and run deploy.
+
+## Deploy / Reindex
+Deploy app:
 ```bash
-sudo journalctl -u san-rag-web -f
+cd /opt/san-assistant
+./scripts/deploy_server.sh
 ```
+
+Reindex KB:
+```bash
+cd /opt/san-assistant
+./scripts/reindex_knowledge_server.sh
+```
+
+Reindex docs:
+```bash
+cd /opt/san-assistant
+./scripts/reindex_documents_server.sh
+```
+
+## Logs
+```bash
+cd /opt/san-assistant
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f backend
+docker compose -f docker-compose.yml -f docker-compose.prod.yml logs -f frontend
+```
+
+## Rollback
+- Revert commit in corresponding repo (`git revert`).
+- Re-run deploy or reindex workflow.
+- For KB/docs issues: revert in KB/docs repo and rerun reindex workflow.
+
+## Extra docs
+- `docs/CI_CD.md`

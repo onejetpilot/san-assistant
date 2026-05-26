@@ -1,6 +1,12 @@
 services:
   backend:
+    env_file: .env
     volumes:
       - /opt/san-assistant-kb:/kb:ro
       - /opt/san-assistant-docs:/docs:ro
       - /opt/san-assistant-data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/health').read()\""]
+      interval: 30s
+      timeout: 10s
+      retries: 3

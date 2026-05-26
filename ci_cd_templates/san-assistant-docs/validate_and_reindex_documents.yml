@@ -1,0 +1,60 @@
+name: validate_and_reindex_documents
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: reindex-documents-production
+  cancel-in-progress: false
+
+jobs:
+  validate_pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate documents metadata
+        run: |
+          set -euo pipefail
+          test -f metadata/documents.yml
+          python -c "from pathlib import Path; import yaml; allowed={'passport','certificate','manual','installation_manual','warranty','datasheet','other'}; data=yaml.safe_load(Path('metadata/documents.yml').read_text(encoding='utf-8')) or {}; docs=data.get('documents'); assert isinstance(docs,list), 'documents must be list'; req=['doc_id','title','product','brand','category','type','file_path','public_url']; [(__import__('builtins').all(d.get(k) for k in req) and d['type'] in allowed and Path(d['file_path']).exists()) or (_ for _ in ()).throw(Exception(f'invalid entry: {d}')) for d in docs]; print('Documents PR validation OK')"
+
+  reindex_on_main:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate metadata quickly
+        run: |
+          set -euo pipefail
+          test -f metadata/documents.yml
+      - name: Reindex documents via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          APP_ACCESS_TOKEN: ${{ secrets.APP_ACCESS_TOKEN }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          envs: APP_BASE_URL,APP_ACCESS_TOKEN
+          script: |
+            set -euo pipefail
+            cd /opt/san-assistant
+            if [ -x ./scripts/reindex_documents_server.sh ]; then
+              ./scripts/reindex_documents_server.sh
+            else
+              cd /opt/san-assistant-docs
+              git fetch origin main
+              git reset --hard origin/main
+              cd /opt/san-assistant
+              docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend python -m app.indexes.document_index --recreate
+            fi
+            BASE_URL="${APP_BASE_URL:-http://localhost:8000}"
+            TOKEN="${APP_ACCESS_TOKEN:-}"
+            if [ -x /opt/san-assistant/scripts/smoke_documents.sh ]; then
+              /opt/san-assistant/scripts/smoke_documents.sh "$BASE_URL" "$TOKEN"
+            fi

@@ -1,0 +1,61 @@
+name: validate_and_reindex_knowledge
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: reindex-knowledge-production
+  cancel-in-progress: false
+
+jobs:
+  validate_pr:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Basic KB checks
+        run: |
+          set -euo pipefail
+          test -d knowledge_base
+          python -c "from pathlib import Path; kb=Path('knowledge_base'); files=sorted(kb.glob('*_rag_ready.txt')); [None for p in files if p.read_text(encoding='utf-8-sig').strip()]; print('KB PR validation OK')"
+
+  reindex_on_main:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Basic KB checks
+        run: |
+          set -euo pipefail
+          test -d knowledge_base
+      - name: Reindex via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        env:
+          APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
+          APP_ACCESS_TOKEN: ${{ secrets.APP_ACCESS_TOKEN }}
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          envs: APP_BASE_URL,APP_ACCESS_TOKEN
+          script: |
+            set -euo pipefail
+            cd /opt/san-assistant
+            if [ -x ./scripts/reindex_knowledge_server.sh ]; then
+              ./scripts/reindex_knowledge_server.sh
+            else
+              cd /opt/san-assistant-kb
+              git fetch origin main
+              git reset --hard origin/main
+              cd /opt/san-assistant
+              docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend python -m app.rag.validate_knowledge_base
+              docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend python -m app.rag.ingest --recreate
+            fi
+            BASE_URL="${APP_BASE_URL:-http://localhost:8000}"
+            TOKEN="${APP_ACCESS_TOKEN:-}"
+            if [ -x /opt/san-assistant/scripts/smoke_rag.sh ]; then
+              /opt/san-assistant/scripts/smoke_rag.sh "$BASE_URL" "$TOKEN"
+            fi

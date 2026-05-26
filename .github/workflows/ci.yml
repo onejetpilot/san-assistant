@@ -1,0 +1,68 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches-ignore:
+      - main
+  workflow_dispatch:
+
+jobs:
+  backend:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Lint (optional)
+        run: |
+          if python -c "import ruff" 2>/dev/null; then python -m ruff check app tests; else echo 'ruff not installed, skip'; fi
+          if python -c "import flake8" 2>/dev/null; then python -m flake8 app tests; else echo 'flake8 not installed, skip'; fi
+      - name: Typecheck (optional)
+        run: |
+          if python -c "import mypy" 2>/dev/null; then python -m mypy app; else echo 'mypy not installed, skip'; fi
+      - name: Tests
+        run: pytest -q
+      - name: Import check
+        run: python -c "import app.api.main"
+      - name: Ensure env example exists
+        run: test -f .env.example
+
+  frontend:
+    runs-on: ubuntu-latest
+    if: ${{ hashFiles('frontend/package.json') != '' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Install deps
+        working-directory: frontend
+        run: npm install
+      - name: Lint (optional)
+        working-directory: frontend
+        run: |
+          npm run lint --if-present
+      - name: Typecheck (optional)
+        working-directory: frontend
+        run: |
+          npm run typecheck --if-present
+      - name: Build
+        working-directory: frontend
+        run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Compose config
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml config
+      - name: Build backend
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml build backend
+      - name: Build frontend
+        run: docker compose -f docker-compose.yml -f docker-compose.prod.yml build frontend
