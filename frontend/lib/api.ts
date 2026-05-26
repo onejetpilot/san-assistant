@@ -10,7 +10,15 @@ export class ApiError extends Error {
   }
 }
 
-const API_BASE = process.env.NEXT_PUBLIC_API_BASE_URL || '';
+function candidateBases(): string[] {
+  const envBase = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
+  if (envBase) return [envBase.replace(/\/+$/, '')];
+  if (typeof window === 'undefined') return ['http://localhost:8000'];
+
+  const protocol = window.location.protocol;
+  const hostname = window.location.hostname;
+  return [window.location.origin, `${protocol}//${hostname}:8000`];
+}
 
 function headers(): HeadersInit {
   const h: HeadersInit = { 'Content-Type': 'application/json' };
@@ -25,35 +33,61 @@ async function handle<T>(resp: Response): Promise<T> {
   }
   if (!resp.ok) {
     const body = await resp.text();
-    throw new ApiError(body || `HTTP ${resp.status}`, resp.status);
+    const friendly =
+      resp.status === 404
+        ? 'API endpoint не найден. Проверь NEXT_PUBLIC_API_BASE_URL или доступность backend на :8000.'
+        : `Ошибка API: HTTP ${resp.status}`;
+    throw new ApiError(body && body.length < 300 ? body : friendly, resp.status);
   }
   return safeJson<T>(resp);
 }
 
+async function requestJson<T>(path: string, init: RequestInit): Promise<T> {
+  let lastError: Error | null = null;
+  const bases = candidateBases();
+
+  for (const base of bases) {
+    const url = `${base}${path}`;
+    try {
+      const resp = await fetch(url, init);
+      const contentType = resp.headers.get('content-type') || '';
+      if (!resp.ok) return handle<T>(resp);
+      if (!contentType.includes('application/json')) {
+        throw new ApiError(
+          `API вернула не JSON (проверь прокси на ${url})`,
+          resp.status || 500,
+        );
+      }
+      return safeJson<T>(resp);
+    } catch (e) {
+      lastError = e instanceof Error ? e : new Error('Network error');
+    }
+  }
+
+  throw lastError ?? new Error('Не удалось обратиться к API');
+}
+
 export async function chat(payload: ChatRequest): Promise<ChatResponse> {
-  const resp = await fetch(`${API_BASE}/api/chat`, {
+  return requestJson<ChatResponse>('/api/chat', {
     method: 'POST',
     headers: headers(),
     body: JSON.stringify(payload),
   });
-  return handle<ChatResponse>(resp);
 }
 
 export async function sendFeedback(payload: FeedbackRequest): Promise<{ status: string }> {
-  const resp = await fetch(`${API_BASE}/api/feedback`, {
+  return requestJson<{ status: string }>('/api/feedback', {
     method: 'POST',
     headers: headers(),
     body: JSON.stringify(payload),
   });
-  return handle<{ status: string }>(resp);
 }
 
 export async function getAdminStatus(): Promise<AdminStatusResponse> {
-  const resp = await fetch(`${API_BASE}/api/admin/status`, {
+  return requestJson<AdminStatusResponse>('/api/admin/status', {
     method: 'GET',
     headers: headers(),
   });
-  return handle<AdminStatusResponse>(resp);
 }
 
 export { getAccessToken, setAccessToken, clearAccessToken };
