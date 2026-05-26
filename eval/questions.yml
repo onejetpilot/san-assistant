@@ -1,0 +1,6 @@
+questions:
+  - question: "Что за OXF01612?"
+    expected_contains: ["артикул"]
+    expected_article: "OXF01612"
+    expected_documents: false
+    forbidden_contains: ["не знаю"]

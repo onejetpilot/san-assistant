@@ -1,0 +1,22 @@
+name: reindex_documents
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reindex documents via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/san-assistant-docs
+            git pull origin main
+            cd /opt/san-assistant
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend python -m app.indexes.document_index --recreate
+            curl -f http://localhost:8000/api/admin/status

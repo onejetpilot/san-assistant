@@ -1,0 +1,23 @@
+name: reindex_knowledge
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+jobs:
+  reindex:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reindex KB via SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_KEY }}
+          script: |
+            set -e
+            cd /opt/san-assistant-kb
+            git pull origin main
+            cd /opt/san-assistant
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend python -m app.rag.validate_knowledge_base
+            docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T backend python -m app.rag.ingest --recreate
+            curl -f http://localhost:8000/api/admin/status

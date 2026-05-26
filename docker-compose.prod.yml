@@ -1,0 +1,6 @@
+services:
+  backend:
+    volumes:
+      - /opt/san-assistant-kb:/kb:ro
+      - /opt/san-assistant-docs:/docs:ro
+      - /opt/san-assistant-data:/data
