@@ -9,7 +9,7 @@ export default function MessageBubble({ role, content }: { role: 'user' | 'assis
   return (
     <div
       className={cn(
-        'rounded-xl px-4 py-3 text-sm leading-6',
+        'inline-block w-fit max-w-full rounded-xl px-4 py-3 text-sm leading-6',
         role === 'user'
           ? 'ml-auto max-w-[88%] bg-slate-900 text-white'
           : 'max-w-[95%] border border-slate-200 bg-slate-50 text-slate-800 whitespace-pre-wrap',
