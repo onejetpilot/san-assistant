@@ -1,5 +1,9 @@
-import Chat from '../components/Chat';
+import ChatLayout from '../components/chat/ChatLayout';
 
 export default function Page() {
-  return <main className="min-h-screen bg-slate-100 p-6"><Chat /></main>;
+  return (
+    <main className="min-h-screen bg-gradient-to-b from-slate-100 via-zinc-100 to-slate-200">
+      <ChatLayout />
+    </main>
+  );
 }
