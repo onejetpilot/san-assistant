@@ -159,7 +159,7 @@ class AnswerService:
         if not kit_components and kit_from_global:
             kit_components = kit_from_global.components
 
-        if (sku_result or kit_from_global) and kit_components and (asks_composition or intent == 'article_lookup'):
+        if (sku_result or kit_from_global) and kit_components and asks_composition:
             base_article = sku_result.article if sku_result else kit_from_global.kit_article
             lines = []
             described_components: list[str] = []
