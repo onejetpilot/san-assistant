@@ -212,7 +212,7 @@ class AnswerService:
                 if target_type not in at:
                     continue
                 short = str(row.get('short_description', ''))
-                if diameter and diameter not in short:
+                if diameter and not re.search(rf'(^|\D){re.escape(diameter)}(\D|$)', short):
                     continue
                 art = str(row.get('article', ''))
                 if not art:
