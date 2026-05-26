@@ -3,6 +3,7 @@ import yaml
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.embedding_client import EmbeddingClient
 from app.utils.article_normalizer import normalize_article
 
 
@@ -36,7 +37,8 @@ class DocumentSearch:
             if type_rows:
                 return [self._as_result(m, 0.9) for m in type_rows[:top_k]]
         try:
-            res = self.collection.query(query_texts=[query], n_results=top_k)
+            qv = EmbeddingClient().embed_texts_sync([query])[0]
+            res = self.collection.query(query_embeddings=[qv], n_results=top_k)
         except Exception:
             return self._fallback_search(query, article, doc_type, top_k)
         out = []

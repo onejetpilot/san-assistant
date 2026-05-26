@@ -15,6 +15,7 @@ from app.indexes.sku_index import build_sku_index
 from app.indexes.product_card_index import build_product_cards, upsert_product_cards
 from app.storage.db import SessionLocal
 from app.storage.models import IngestionRun
+from app.core.embedding_client import EmbeddingClient
 
 
 def run(recreate: bool = False) -> None:
@@ -51,9 +52,12 @@ def run(recreate: bool = False) -> None:
             pass
     col = client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CHUNKS)
     if all_chunks:
+        texts = [c.text for c in all_chunks]
+        vectors = EmbeddingClient().embed_texts_sync(texts)
         col.upsert(
             ids=[c.id for c in all_chunks],
-            documents=[c.text for c in all_chunks],
+            documents=texts,
+            embeddings=vectors,
             metadatas=[c.metadata for c in all_chunks],
         )
 

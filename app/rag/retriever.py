@@ -2,6 +2,7 @@ from pydantic import BaseModel
 import chromadb
 
 from app.core.config import settings
+from app.core.embedding_client import EmbeddingClient
 
 
 class RetrievedChunk(BaseModel):
@@ -24,7 +25,8 @@ class RagRetriever:
         if not self.collection:
             return []
         try:
-            res = self.collection.query(query_texts=[query], n_results=top_k or settings.TOP_K)
+            qv = EmbeddingClient().embed_texts_sync([query])[0]
+            res = self.collection.query(query_embeddings=[qv], n_results=top_k or settings.TOP_K)
         except Exception:
             self.available = False
             return []

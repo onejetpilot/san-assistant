@@ -11,6 +11,7 @@ from app.core.config import settings
 from app.storage.db import SessionLocal
 from app.storage.models import DocumentIndexRun
 from app.documents.storage import get_storage_provider
+from app.core.embedding_client import EmbeddingClient
 
 ALLOWED_TYPES = {'passport', 'certificate', 'manual', 'installation_manual', 'warranty', 'datasheet', 'other'}
 
@@ -49,8 +50,9 @@ def build_document_index(docs: list[dict], recreate: bool = False) -> None:
             d['articles'] = ', '.join(d['articles'])
         normalized.append(d)
     ids = [d['doc_id'] for d in normalized]
-    bodies = [f"{d['title']} {d['product']} {d['brand']} {d['category']} {d['type']} {' '.join(d.get('articles', []))}" for d in normalized]
-    col.upsert(ids=ids, documents=bodies, metadatas=normalized)
+    bodies = [f"{d['title']} {d['product']} {d['brand']} {d['category']} {d['type']} {d.get('articles', '')}" for d in normalized]
+    vectors = EmbeddingClient().embed_texts_sync(bodies)
+    col.upsert(ids=ids, documents=bodies, embeddings=vectors, metadatas=normalized)
 
 
 def run(recreate: bool = False) -> None:
