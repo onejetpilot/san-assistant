@@ -59,6 +59,10 @@ def parse_rag_file(path: str | Path) -> ParsedRagDocument:
     i = 0
     while i < len(lines):
         line = lines[i]
+        if not line.strip():
+            # Allow visual separators inside metadata header block.
+            i += 1
+            continue
         matched = False
         for field in META_FIELDS:
             if line.startswith(f'{field}:'):
