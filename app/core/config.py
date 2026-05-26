@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     TOP_K: int = 8
     RERANK_TOP_K: int = 5
     ENABLE_RERANKER: bool = False
+    ENABLE_KB_VALIDATION: bool = False
 
     ROUTER_MODE: str = 'hybrid'
     ENABLE_WEB_SEARCH: bool = True

@@ -28,7 +28,7 @@ class DocumentSearch:
         metas = all_rows.get('metadatas', [])
         if article:
             norm = normalize_article(article)
-            matched = [m for m in metas if norm in [normalize_article(x) for x in (m.get('articles') or [])]]
+            matched = [m for m in metas if norm in [normalize_article(x) for x in self._articles_as_list(m.get('articles'))]]
             if matched:
                 return [self._as_result(m, 0.99) for m in matched]
         if doc_type:
@@ -46,23 +46,34 @@ class DocumentSearch:
 
     @staticmethod
     def _as_result(m: dict, score: float) -> dict:
+        articles = m.get('articles', [])
+        if isinstance(articles, str):
+            articles = [x.strip() for x in articles.split(',') if x.strip()]
         return {
             'title': m.get('title', ''),
             'type': m.get('type', 'other'),
             'product': m.get('product', ''),
             'brand': m.get('brand', ''),
             'category': m.get('category', ''),
-            'articles': m.get('articles', []),
+            'articles': articles,
             'public_url': m.get('public_url', ''),
             'file_path': m.get('file_path', ''),
             'score': score,
         }
 
+    @staticmethod
+    def _articles_as_list(value) -> list[str]:
+        if isinstance(value, list):
+            return [str(x) for x in value]
+        if isinstance(value, str):
+            return [x.strip() for x in value.split(',') if x.strip()]
+        return []
+
     def _fallback_search(self, query: str, article: str | None, doc_type: str | None, top_k: int) -> list[dict]:
         rows = self.fallback_docs
         if article:
             norm = normalize_article(article)
-            hit = [r for r in rows if norm in [normalize_article(x) for x in r.get('articles', [])]]
+            hit = [r for r in rows if norm in [normalize_article(x) for x in self._articles_as_list(r.get('articles'))]]
             if hit:
                 return [self._as_result(r, 0.95) for r in hit[:top_k]]
         if doc_type:

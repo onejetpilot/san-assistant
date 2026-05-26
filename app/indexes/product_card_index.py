@@ -31,8 +31,14 @@ def upsert_product_cards(cards: list[dict], recreate: bool = False) -> None:
         except Exception:
             pass
     collection = client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CARDS)
-    ids = [c['doc_id'] for c in cards]
-    docs = [f"{c['product']} {c['brand']} {c['category']} {c['description']} {c['purpose']}" for c in cards]
-    metas = cards
+    normalized = []
+    for c in cards:
+        row = dict(c)
+        if isinstance(row.get('aliases'), list):
+            row['aliases'] = ', '.join(row['aliases'])
+        normalized.append(row)
+    ids = [c['doc_id'] for c in normalized]
+    docs = [f"{c['product']} {c['brand']} {c['category']} {c['description']} {c['purpose']}" for c in normalized]
+    metas = normalized
     if ids:
         collection.upsert(ids=ids, documents=docs, metadatas=metas)

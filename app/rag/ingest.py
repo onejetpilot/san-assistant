@@ -18,17 +18,20 @@ from app.storage.models import IngestionRun
 
 
 def run(recreate: bool = False) -> None:
-    errors, warnings = validate_knowledge_base(settings.KNOWLEDGE_BASE_PATH)
-    if errors:
-        index_version = f"rag-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
-        session = SessionLocal()
-        session.add(IngestionRun(
-            run_type='knowledge', status='failed', documents_count=0, chunks_count=0, sku_count=0,
-            errors_json=errors, warnings_json=warnings, index_version=index_version,
-        ))
-        session.commit()
-        session.close()
-        raise RuntimeError('\n'.join(errors))
+    errors: list[str] = []
+    warnings: list[str] = []
+    if settings.ENABLE_KB_VALIDATION:
+        errors, warnings = validate_knowledge_base(settings.KNOWLEDGE_BASE_PATH)
+        if errors:
+            index_version = f"rag-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
+            session = SessionLocal()
+            session.add(IngestionRun(
+                run_type='knowledge', status='failed', documents_count=0, chunks_count=0, sku_count=0,
+                errors_json=errors, warnings_json=warnings, index_version=index_version,
+            ))
+            session.commit()
+            session.close()
+            raise RuntimeError('\n'.join(errors))
 
     files = sorted(Path(settings.KNOWLEDGE_BASE_PATH).glob('*_rag_ready.txt'))
     docs = [parse_rag_file(f) for f in files]

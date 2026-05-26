@@ -45,6 +45,8 @@ def build_document_index(docs: list[dict], recreate: bool = False) -> None:
     for d in docs:
         d = dict(d)
         d['public_url'] = provider.resolve_public_url(d)
+        if isinstance(d.get('articles'), list):
+            d['articles'] = ', '.join(d['articles'])
         normalized.append(d)
     ids = [d['doc_id'] for d in normalized]
     bodies = [f"{d['title']} {d['product']} {d['brand']} {d['category']} {d['type']} {' '.join(d.get('articles', []))}" for d in normalized]

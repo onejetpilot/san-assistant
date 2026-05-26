@@ -26,7 +26,7 @@ def _mk(doc: ParsedRagDocument, section_group: str, section: str, body: str, idx
             'aliases': ', '.join(doc.aliases),
             'section': section,
             'section_group': section_group,
-            'articles': [a.original for a in doc.articles],
+            'articles': ', '.join([a.original for a in doc.articles]),
             'source_file': doc.source_file,
         },
     )
