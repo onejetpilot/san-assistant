@@ -8,6 +8,7 @@ from app.core.config import settings
 from app.rag.parser import parse_rag_file
 
 FORBIDDEN_ARTICLE_TOKENS = {'DN20', 'PN25', 'G1/2', 'M30X1.5', 'IPX4', 'ГОСТ', 'СП', 'ФЗ', 'CW617N', 'CW614N', 'AISI304'}
+NO_DATA_MARKER = '[НЕТ ДАННЫХ В ИСХОДНОМ ДОКУМЕНТЕ]'
 
 
 class ValidationError(Exception):
@@ -24,9 +25,15 @@ def validate_document(path: str | Path, seen_articles: dict[str, str]) -> tuple[
         return errors, warnings
 
     doc = parse_rag_file(p)
-    for req in ['document', 'doc_id', 'product', 'category', 'brand']:
+    # Hard requirements for index integrity.
+    for req in ['document', 'doc_id']:
         if not getattr(doc, req):
             errors.append(f'{p}: missing {req.upper()}')
+
+    # Soft requirements: may be unavailable in source documents.
+    for req in ['product', 'category', 'brand']:
+        if not getattr(doc, req):
+            warnings.append(f'{p}: missing {req.upper()}')
 
     if 'TURN47FILE0' in raw:
         errors.append(f'{p}: contains OCR garbage token')
@@ -48,6 +55,11 @@ def validate_document(path: str | Path, seen_articles: dict[str, str]) -> tuple[
         for line in variants.content.splitlines():
             l = line.strip().lstrip('-').strip()
             if not l:
+                continue
+            if l == NO_DATA_MARKER:
+                continue
+            if l.startswith('#'):
+                # Allow inline notes/comments in documents authored by humans.
                 continue
             if not re.match(r'^[A-Za-z0-9._\-/]+\s*[—-]', l) and not re.match(r'^[A-Za-z0-9._\-/]+$', l):
                 errors.append(f'{p}: VARIANTS (АРТИКУЛЫ) line must start from article: {l}')
