@@ -54,6 +54,7 @@ def build_sku_index(docs: list[ParsedRagDocument]) -> SkuIndex:
             norm = normalize_article(a.original)
             variant_desc = variants_map.get(norm, '')
             kit_components = _extract_kit_components(variant_desc)
+            short = variant_desc or desc
             data[norm] = SkuRecord(
                 article=a.original,
                 product=doc.product,
@@ -62,7 +63,7 @@ def build_sku_index(docs: list[ParsedRagDocument]) -> SkuIndex:
                 model=doc.model,
                 doc_id=doc.doc_id,
                 source_file=doc.source_file,
-                short_description=desc,
+                short_description=short[:240],
                 related_articles=[x for x in related if normalize_article(x) != norm][:10],
                 kit_components=kit_components,
                 matched_from='ARTICLES',

@@ -173,7 +173,11 @@ class AnswerService:
             for component_article in component_articles:
                 row = self.sku.lookup(component_article)
                 if row:
-                    described_components.append(f"{row.article} — {row.product}")
+                    component_desc = (row.short_description or '').strip()
+                    if component_desc:
+                        described_components.append(f"{row.article} — {component_desc}")
+                    else:
+                        described_components.append(f"{row.article} — {row.product}")
             lines.append(f"Состав комплекта {base_article}: " + '; '.join(kit_components) + '.')
             if described_components:
                 lines.append("Компоненты:")
