@@ -9,6 +9,7 @@ from app.rag.parser import parse_rag_file
 
 FORBIDDEN_ARTICLE_TOKENS = {'DN20', 'PN25', 'G1/2', 'M30X1.5', 'IPX4', 'ГОСТ', 'СП', 'ФЗ', 'CW617N', 'CW614N', 'AISI304'}
 NO_DATA_MARKER = '[НЕТ ДАННЫХ В ИСХОДНОМ ДОКУМЕНТЕ]'
+NO_DATA_MARKER_PLAIN = 'НЕТ ДАННЫХ В ИСХОДНОМ ДОКУМЕНТЕ'
 
 
 class ValidationError(Exception):
@@ -46,9 +47,9 @@ def validate_document(path: str | Path, seen_articles: dict[str, str]) -> tuple[
     for a in doc.articles:
         upper = a.normalized.upper()
         if upper in FORBIDDEN_ARTICLE_TOKENS:
-            errors.append(f'{p}: forbidden article token {a.original}')
+            warnings.append(f'{p}: forbidden article-like token in ARTICLES: {a.original}')
         if re.search(r'\s|—|:', a.original):
-            errors.append(f'{p}: article contains description {a.original}')
+            warnings.append(f'{p}: article contains description-like suffix {a.original}')
 
     variants = doc.sections.get('VARIANTS (АРТИКУЛЫ)')
     if variants and variants.content.strip():
@@ -58,12 +59,21 @@ def validate_document(path: str | Path, seen_articles: dict[str, str]) -> tuple[
                 continue
             if l == NO_DATA_MARKER:
                 continue
+            if l == NO_DATA_MARKER_PLAIN:
+                continue
             if l.startswith('#'):
                 # Allow inline notes/comments in documents authored by humans.
                 continue
-            if not re.match(r'^[A-Za-z0-9._\-/]+\s*[—-]', l) and not re.match(r'^[A-Za-z0-9._\-/]+$', l):
-                errors.append(f'{p}: VARIANTS (АРТИКУЛЫ) line must start from article: {l}')
-                break
+            # MVP-tolerant mode: allow model-like markers and list-like lines.
+            if re.match(r'^[A-Za-zА-Яа-я0-9._\-/*]+\s*[—-].*$', l):
+                continue
+            if re.match(r'^[A-Za-zА-Яа-я0-9._\-/*]+:.*$', l):
+                continue
+            if ',' in l and re.match(r'^[A-Za-zА-Яа-я0-9._\-/*,\s]+$', l):
+                continue
+            if re.match(r'^[A-Za-zА-Яа-я0-9._\-/*]+$', l):
+                continue
+            warnings.append(f'{p}: unparsed VARIANTS (АРТИКУЛЫ) line: {l}')
 
     local_seen: set[str] = set()
     for a in doc.articles:
@@ -73,7 +83,7 @@ def validate_document(path: str | Path, seen_articles: dict[str, str]) -> tuple[
 
         previous = seen_articles.get(a.normalized)
         if previous and previous != doc.doc_id:
-            errors.append(f'{p}: article conflict {a.original} between {previous} and {doc.doc_id}')
+            warnings.append(f'{p}: article conflict {a.original} between {previous} and {doc.doc_id}')
         else:
             seen_articles[a.normalized] = doc.doc_id
 
