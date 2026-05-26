@@ -14,6 +14,7 @@ from app.services.conversation_memory import ConversationMemoryService
 from app.services.query_expander import QueryExpander
 from app.services.query_resolver import resolve_query
 from app.services.router import route_query
+from app.services.slot_extractor import extract_slots
 from app.storage.repository import save_chat_request, save_knowledge_gap, get_current_index_versions
 from app.utils.ids import gen_request_id
 from app.utils.text import extract_article_candidate
@@ -24,13 +25,6 @@ from app.utils.article_normalizer import normalize_article
 
 
 INJECTION_PATTERNS = ['ignore previous instructions', 'system prompt', 'developer message']
-TYPE_SYNONYMS = {
-    'гильз': 'гильз',
-    'муфт': 'муфт',
-    'тройник': 'тройник',
-    'угол': 'угол',
-    'соединен': 'соединен',
-}
 
 
 class AnswerService:
@@ -53,15 +47,6 @@ class AnswerService:
         for pat in INJECTION_PATTERNS:
             out = re.sub(pat, '[REMOVED]', out, flags=re.IGNORECASE)
         return out
-
-    def _extract_target_type(self, ql: str) -> str:
-        for key, marker in TYPE_SYNONYMS.items():
-            if key in ql:
-                return marker
-        return ''
-
-    def _is_dimension_query(self, ql: str) -> bool:
-        return any(x in ql for x in ['длина', 'диаметр', 'размер'])
 
     async def answer(self, query: str, session_id: str | None = None, answer_style: str = 'detailed') -> dict:
         started = now_ms()
@@ -98,12 +83,15 @@ class AnswerService:
 
         doc_type = None
         ql = resolved_query.lower()
+        slots = extract_slots(resolved_query)
         if 'паспорт' in ql:
             doc_type = 'passport'
         elif 'сертификат' in ql:
             doc_type = 'certificate'
         elif 'инструкц' in ql:
             doc_type = 'manual'
+        if slots.requested_doc_type:
+            doc_type = slots.requested_doc_type
 
         doc_results = []
         if 'document_search' in tools or intent in {'warranty_question', 'document_request'}:
@@ -166,9 +154,9 @@ class AnswerService:
             'комплект',
             'в наборе',
         )
-        asks_composition = any(k in ql for k in composition_keywords)
-        asks_dimension = self._is_dimension_query(ql)
-        target_type = self._extract_target_type(ql)
+        asks_composition = slots.asks_composition or any(k in ql for k in composition_keywords)
+        asks_dimension = slots.intent_hint == 'dimension'
+        target_type = slots.item_type
         if article:
             kit_from_global = self.kits.lookup(article)
         else:
@@ -204,12 +192,13 @@ class AnswerService:
 
         # Deterministic size answer by article type + dimension, to avoid mixing types (e.g. гильза vs муфта).
         if not answer and asks_dimension and target_type:
-            q_diameter = re.search(r'\b(\d{1,3})\b', ql)
-            diameter = q_diameter.group(1) if q_diameter else ''
+            diameter = slots.dimension_value
             candidates = []
             for row in self.sku.data.values():
                 at = str(row.get('article_type', '')).lower()
                 if target_type not in at:
+                    continue
+                if slots.brand and str(row.get('brand', '')).upper() != slots.brand:
                     continue
                 short = str(row.get('short_description', ''))
                 if diameter and not re.search(rf'(^|\D){re.escape(diameter)}(\D|$)', short):
@@ -230,6 +219,27 @@ class AnswerService:
                 lines = [f"Найдено по запросу ({target_type}):"]
                 for art, short in top:
                     lines.append(f"- {art}: {short}")
+                answer = '\n'.join(lines)
+
+        # Deterministic article list by item_type (and optional brand).
+        if not answer and slots.asks_articles_list and target_type:
+            articles = []
+            for row in self.sku.data.values():
+                at = str(row.get('article_type', '')).lower()
+                if target_type not in at:
+                    continue
+                if slots.brand and str(row.get('brand', '')).upper() != slots.brand:
+                    continue
+                a = str(row.get('article', '')).strip()
+                if a:
+                    articles.append(a)
+            articles = list(dict.fromkeys(articles))
+            if articles:
+                hdr = f"Артикулы {target_type}"
+                if slots.brand:
+                    hdr += f" {slots.brand}"
+                lines = [hdr + ':']
+                lines.extend([f"- {a}" for a in articles[:30]])
                 answer = '\n'.join(lines)
 
         if comparison_block:
