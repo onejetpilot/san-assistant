@@ -24,6 +24,13 @@ from app.utils.article_normalizer import normalize_article
 
 
 INJECTION_PATTERNS = ['ignore previous instructions', 'system prompt', 'developer message']
+TYPE_SYNONYMS = {
+    'гильз': 'гильз',
+    'муфт': 'муфт',
+    'тройник': 'тройник',
+    'угол': 'угол',
+    'соединен': 'соединен',
+}
 
 
 class AnswerService:
@@ -46,6 +53,15 @@ class AnswerService:
         for pat in INJECTION_PATTERNS:
             out = re.sub(pat, '[REMOVED]', out, flags=re.IGNORECASE)
         return out
+
+    def _extract_target_type(self, ql: str) -> str:
+        for key, marker in TYPE_SYNONYMS.items():
+            if key in ql:
+                return marker
+        return ''
+
+    def _is_dimension_query(self, ql: str) -> bool:
+        return any(x in ql for x in ['длина', 'диаметр', 'размер'])
 
     async def answer(self, query: str, session_id: str | None = None, answer_style: str = 'detailed') -> dict:
         started = now_ms()
@@ -151,6 +167,8 @@ class AnswerService:
             'в наборе',
         )
         asks_composition = any(k in ql for k in composition_keywords)
+        asks_dimension = self._is_dimension_query(ql)
+        target_type = self._extract_target_type(ql)
         if article:
             kit_from_global = self.kits.lookup(article)
         else:
@@ -183,6 +201,36 @@ class AnswerService:
                 lines.append("Компоненты:")
                 lines.extend([f"- {x}" for x in described_components])
             answer = '\n'.join(lines)
+
+        # Deterministic size answer by article type + dimension, to avoid mixing types (e.g. гильза vs муфта).
+        if not answer and asks_dimension and target_type:
+            q_diameter = re.search(r'\b(\d{1,3})\b', ql)
+            diameter = q_diameter.group(1) if q_diameter else ''
+            candidates = []
+            for row in self.sku.data.values():
+                at = str(row.get('article_type', '')).lower()
+                if target_type not in at:
+                    continue
+                short = str(row.get('short_description', ''))
+                if diameter and diameter not in short:
+                    continue
+                art = str(row.get('article', ''))
+                if not art:
+                    continue
+                candidates.append((art, short))
+            if candidates:
+                unique = []
+                seen = set()
+                for art, short in candidates:
+                    if art in seen:
+                        continue
+                    seen.add(art)
+                    unique.append((art, short))
+                top = unique[:3]
+                lines = [f"Найдено по запросу ({target_type}):"]
+                for art, short in top:
+                    lines.append(f"- {art}: {short}")
+                answer = '\n'.join(lines)
 
         if comparison_block:
             answer = (

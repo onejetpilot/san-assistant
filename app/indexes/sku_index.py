@@ -18,6 +18,7 @@ class SkuRecord(BaseModel):
     doc_id: str
     source_file: str
     short_description: str = ''
+    article_type: str = ''
     related_articles: list[str] = []
     kit_components: list[str] = []
     matched_from: str = 'ARTICLES'
@@ -50,6 +51,8 @@ def build_sku_index(docs: list[ParsedRagDocument]) -> SkuIndex:
         related = [a.original for a in doc.articles]
         variants_text = doc.sections.get('VARIANTS (АРТИКУЛЫ)').content if doc.sections.get('VARIANTS (АРТИКУЛЫ)') else ''
         variants_map = _extract_variant_lines(variants_text)
+        connections_text = doc.sections.get('CONNECTIONS').content if doc.sections.get('CONNECTIONS') else ''
+        type_map = _extract_article_types(connections_text)
         for a in doc.articles:
             norm = normalize_article(a.original)
             variant_desc = variants_map.get(norm, '')
@@ -64,6 +67,7 @@ def build_sku_index(docs: list[ParsedRagDocument]) -> SkuIndex:
                 doc_id=doc.doc_id,
                 source_file=doc.source_file,
                 short_description=short[:240],
+                article_type=type_map.get(norm, ''),
                 related_articles=[x for x in related if normalize_article(x) != norm][:10],
                 kit_components=kit_components,
                 matched_from='ARTICLES',
@@ -103,3 +107,22 @@ def _extract_kit_components(variant_desc: str) -> list[str]:
         if art:
             parts.append(art.group(1))
     return parts
+
+
+def _extract_article_types(connections_text: str) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in connections_text.splitlines():
+        line = raw.strip().lstrip('-').strip()
+        if not line:
+            continue
+        if ' - ' in line:
+            left, right = line.split(' - ', 1)
+        elif ' – ' in line:
+            left, right = line.split(' – ', 1)
+        else:
+            continue
+        article_type = right.split('.')[0].strip().lower()
+        articles = [x.strip() for x in left.split(',') if x.strip()]
+        for a in articles:
+            out[normalize_article(a)] = article_type
+    return out
