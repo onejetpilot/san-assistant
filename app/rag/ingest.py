@@ -5,9 +5,8 @@ from pathlib import Path
 from datetime import datetime
 from uuid import uuid4
 
-import chromadb
-
 from app.core.config import settings
+from app.core.chroma import get_chroma_client
 from app.rag.validate_knowledge_base import validate_knowledge_base
 from app.rag.parser import parse_rag_file
 from app.rag.chunker import build_chunks
@@ -44,13 +43,13 @@ def run(recreate: bool = False) -> None:
     cards = build_product_cards(docs)
     sku = build_sku_index(docs)
 
-    client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
+    client = get_chroma_client()
     if recreate:
         try:
             client.delete_collection(settings.CHROMA_COLLECTION_PRODUCT_CHUNKS)
         except Exception:
             pass
-    col = client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CHUNKS)
+    col = client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CHUNKS, embedding_function=None)
     if all_chunks:
         texts = [c.text for c in all_chunks]
         vectors = EmbeddingClient().embed_texts_sync(texts)

@@ -5,9 +5,9 @@ from datetime import datetime, timezone
 from uuid import uuid4
 from pathlib import Path
 import yaml
-import chromadb
 
 from app.core.config import settings
+from app.core.chroma import get_chroma_client
 from app.storage.db import SessionLocal
 from app.storage.models import DocumentIndexRun
 from app.documents.storage import get_storage_provider
@@ -34,13 +34,13 @@ def validate_documents_metadata(docs: list[dict], repo_root: str) -> None:
 
 
 def build_document_index(docs: list[dict], recreate: bool = False) -> None:
-    client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
+    client = get_chroma_client()
     if recreate:
         try:
             client.delete_collection(settings.CHROMA_COLLECTION_DOCUMENTS)
         except Exception:
             pass
-    col = client.get_or_create_collection(settings.CHROMA_COLLECTION_DOCUMENTS)
+    col = client.get_or_create_collection(settings.CHROMA_COLLECTION_DOCUMENTS, embedding_function=None)
     provider = get_storage_provider()
     normalized = []
     for d in docs:

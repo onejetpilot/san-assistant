@@ -1,7 +1,6 @@
 from pydantic import BaseModel
-import chromadb
-
 from app.core.config import settings
+from app.core.chroma import get_chroma_client
 from app.core.embedding_client import EmbeddingClient
 
 
@@ -16,8 +15,8 @@ class RagRetriever:
         self.available = True
         self.collection = None
         try:
-            self.client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
-            self.collection = self.client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CHUNKS)
+            self.client = get_chroma_client()
+            self.collection = self.client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CHUNKS, embedding_function=None)
         except Exception:
             self.available = False
 

@@ -1,6 +1,6 @@
-import chromadb
-
 from app.core.config import settings
+from app.core.chroma import get_chroma_client
+from app.core.embedding_client import EmbeddingClient
 from app.rag.parser import ParsedRagDocument
 
 
@@ -24,13 +24,13 @@ def build_product_cards(docs: list[ParsedRagDocument]) -> list[dict]:
 
 
 def upsert_product_cards(cards: list[dict], recreate: bool = False) -> None:
-    client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
+    client = get_chroma_client()
     if recreate:
         try:
             client.delete_collection(settings.CHROMA_COLLECTION_PRODUCT_CARDS)
         except Exception:
             pass
-    collection = client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CARDS)
+    collection = client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CARDS, embedding_function=None)
     normalized = []
     for c in cards:
         row = dict(c)
@@ -39,6 +39,7 @@ def upsert_product_cards(cards: list[dict], recreate: bool = False) -> None:
         normalized.append(row)
     ids = [c['doc_id'] for c in normalized]
     docs = [f"{c['product']} {c['brand']} {c['category']} {c['description']} {c['purpose']}" for c in normalized]
+    vectors = EmbeddingClient().embed_texts_sync(docs)
     metas = normalized
     if ids:
-        collection.upsert(ids=ids, documents=docs, metadatas=metas)
+        collection.upsert(ids=ids, documents=docs, embeddings=vectors, metadatas=metas)

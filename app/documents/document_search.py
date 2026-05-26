@@ -1,8 +1,8 @@
-import chromadb
 import yaml
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.chroma import get_chroma_client
 from app.core.embedding_client import EmbeddingClient
 from app.utils.article_normalizer import normalize_article
 
@@ -17,8 +17,8 @@ class DocumentSearch:
             data = yaml.safe_load(meta_path.read_text(encoding='utf-8')) or {}
             self.fallback_docs = data.get('documents', [])
         try:
-            self.client = chromadb.PersistentClient(path=settings.CHROMA_PATH)
-            self.collection = self.client.get_or_create_collection(settings.CHROMA_COLLECTION_DOCUMENTS)
+            self.client = get_chroma_client()
+            self.collection = self.client.get_or_create_collection(settings.CHROMA_COLLECTION_DOCUMENTS, embedding_function=None)
         except Exception:
             self.available = False
 
