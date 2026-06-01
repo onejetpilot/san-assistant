@@ -1,7 +1,6 @@
 'use client';
 
 import { useEffect, useMemo, useState } from 'react';
-import { API_BASE } from '../lib/api';
 
 type ChatResponse = {
   session_id?: string;
@@ -62,7 +61,7 @@ export default function Chat() {
     const userText = message.trim();
     setLoading(true);
     try {
-      const r = await fetch(`${API_BASE}/api/chat`, {
+      const r = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ session_id: sessionId, message: userText, answer_style: answerStyle }),
