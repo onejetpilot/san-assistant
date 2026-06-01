@@ -13,11 +13,8 @@ export class ApiError extends Error {
 function candidateBases(): string[] {
   const envBase = process.env.NEXT_PUBLIC_API_BASE_URL?.trim();
   if (envBase) return [envBase.replace(/\/+$/, '')];
-  if (typeof window === 'undefined') return ['http://localhost:8000'];
-
-  const protocol = window.location.protocol;
-  const hostname = window.location.hostname;
-  return [window.location.origin, `${protocol}//${hostname}:8000`];
+  if (typeof window === 'undefined') return [''];
+  return [''];
 }
 
 function headers(): HeadersInit {
