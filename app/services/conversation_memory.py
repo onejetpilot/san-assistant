@@ -18,6 +18,10 @@ class ConversationMemoryService:
         now = datetime.utcnow()
         if not row:
             db.add(ChatSession(session_id=sid, created_at=now, updated_at=now))
+            # Defensive reset for a brand-new session id to avoid any stale state collisions.
+            stale_state = db.execute(select(ConversationState).where(ConversationState.session_id == sid)).scalars().first()
+            if stale_state:
+                db.delete(stale_state)
         else:
             row.updated_at = now
         db.commit()

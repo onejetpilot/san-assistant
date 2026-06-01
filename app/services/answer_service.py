@@ -57,8 +57,31 @@ class AnswerService:
         resolved = resolve_query(query, state, recent)
         resolved_query = resolved['resolved_query']
         expanded_query = self.expander.expand(resolved_query)
+        slots = extract_slots(resolved_query)
 
         self.memory.append_message(sid, role='user', content=query, request_id=request_id, metadata_json={'resolved_query': resolved_query})
+
+        # Avoid hallucinated carry-over from previous topic for ambiguous short noise-like inputs.
+        article = extract_article_candidate(resolved_query)
+        q_tokens = [t for t in re.split(r'\s+', query.strip()) if t]
+        is_ambiguous_short = (
+            len(q_tokens) <= 2
+            and not article
+            and not slots.item_type
+            and not slots.brand
+            and not slots.asks_documents
+            and not re.search(r'\d', query)
+        )
+        if is_ambiguous_short:
+            answer = 'Не совсем понял запрос. Уточните, пожалуйста, товар, артикул или параметр (например: "артикулы гильз ONDO" или "паспорт на ONDO...").'
+            payload = {
+                'session_id': sid, 'request_id': request_id, 'answer': answer,
+                'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
+                'answer_mode': 'clarify', 'sources': [], 'documents': [], 'used_web_search': False,
+                'web_results': [], 'confidence': 'low', 'tools_used': ['clarify'],
+            }
+            self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'clarify', 'answer_mode': 'clarify'})
+            return payload
 
         router = await route_query(resolved_query)
         intent = router.get('intent', 'product_question')
@@ -83,7 +106,6 @@ class AnswerService:
 
         doc_type = None
         ql = resolved_query.lower()
-        slots = extract_slots(resolved_query)
         if 'паспорт' in ql:
             doc_type = 'passport'
         elif 'сертификат' in ql:
@@ -255,7 +277,7 @@ class AnswerService:
                     'original_query': query,
                     'resolved_query': resolved_query,
                     'conversation_state': state,
-                    'recent_messages': recent[-10:],
+                    'recent_messages': recent[-10:] if resolved.get('depends_on_history') else [],
                     'router_decision': router,
                     'sku_result': sku_result.model_dump() if sku_result else None,
                     'product_cards': [],
