@@ -16,8 +16,14 @@ def test_extract_articles_list():
     assert s.brand == 'ONDO'
 
 
+def test_extract_articles_list_without_question_word():
+    s = extract_slots('артикулы гильз ONDO')
+    assert s.asks_articles_list is True
+    assert s.item_type == 'гильза'
+    assert s.brand == 'ONDO'
+
+
 def test_extract_document_request():
     s = extract_slots('дай паспорт на артикул OXF02012')
     assert s.asks_documents is True
     assert s.requested_doc_type == 'passport'
-

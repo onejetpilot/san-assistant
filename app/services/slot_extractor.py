@@ -67,7 +67,13 @@ def extract_slots(query: str) -> QuerySlots:
         slots.asks_composition = True
         slots.intent_hint = 'composition'
 
-    if 'какие артикул' in ql or 'перечень артикул' in ql or ('артикул' in ql and 'какие' in ql):
+    if (
+        'какие артикул' in ql
+        or 'перечень артикул' in ql
+        or 'список артикул' in ql
+        or ('артикул' in ql and 'какие' in ql)
+        or ('артикул' in ql and (slots.item_type or slots.brand))
+    ):
         slots.asks_articles_list = True
         if slots.intent_hint == 'generic':
             slots.intent_hint = 'articles_list'

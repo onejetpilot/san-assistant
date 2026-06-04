@@ -61,3 +61,9 @@ def test_format_exact_kit_answer_with_component_descriptions():
 def test_russian_composition_markers():
     assert extract_slots('Что входит в набор OXF01612K10G?').asks_composition
     assert extract_slots('Какая комплектация OXF01612K10G?').asks_composition
+
+
+def test_matches_item_type_with_russian_plural_form():
+    assert AnswerService._matches_item_type('гильза', 'гильзы аксиальные')
+    assert AnswerService._matches_item_type('муфта', 'муфты аксиальные')
+    assert not AnswerService._matches_item_type('гильза', 'муфты аксиальные')

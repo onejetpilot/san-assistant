@@ -78,6 +78,27 @@ class AnswerService:
             lines.extend([f"- {x}" for x in described_components])
         return "\n".join(lines)
 
+    @staticmethod
+    def _matches_item_type(target_type: str, article_type: str) -> bool:
+        target = str(target_type or '').strip().lower()
+        article = str(article_type or '').strip().lower()
+        if not target or not article:
+            return False
+        if target in article:
+            return True
+
+        stems = {
+            'гильза': 'гильз',
+            'муфта': 'муфт',
+            'тройник': 'тройник',
+            'уголок': 'угол',
+            'соединение': 'соединен',
+            'кран': 'кран',
+            'коллектор': 'коллектор',
+        }
+        stem = stems.get(target, target)
+        return stem in article
+
     async def answer(self, query: str, session_id: str | None = None, answer_style: str = 'detailed') -> dict:
         started = now_ms()
         request_id = gen_request_id()
@@ -241,7 +262,7 @@ class AnswerService:
             candidates = []
             for row in self.sku.data.values():
                 at = str(row.get('article_type', '')).lower()
-                if target_type not in at:
+                if not self._matches_item_type(target_type, at):
                     continue
                 if slots.brand and str(row.get('brand', '')).upper() != slots.brand:
                     continue
@@ -271,7 +292,7 @@ class AnswerService:
             articles = []
             for row in self.sku.data.values():
                 at = str(row.get('article_type', '')).lower()
-                if target_type not in at:
+                if not self._matches_item_type(target_type, at):
                     continue
                 if slots.brand and str(row.get('brand', '')).upper() != slots.brand:
                     continue
