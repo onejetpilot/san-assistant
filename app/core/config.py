@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     CHROMA_COLLECTION_PRODUCT_CHUNKS: str = 'product_chunks'
     CHROMA_COLLECTION_PRODUCT_CARDS: str = 'product_cards'
     CHROMA_COLLECTION_DOCUMENTS: str = 'documents'
+    INDEXES_PATH: str = '/data/indexes'
 
     KNOWLEDGE_BASE_PATH: str = '/kb/knowledge_base'
     DOCUMENTS_REPO_PATH: str = '/docs'

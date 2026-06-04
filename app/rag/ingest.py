@@ -14,11 +14,13 @@ from app.indexes.sku_index import build_sku_index
 from app.indexes.kit_index import build_kit_index
 from app.indexes.product_card_index import build_product_cards, upsert_product_cards
 from app.storage.db import SessionLocal
+from app.storage.db import init_db
 from app.storage.models import IngestionRun
 from app.core.embedding_client import EmbeddingClient
 
 
 def run(recreate: bool = False) -> None:
+    init_db()
     errors: list[str] = []
     warnings: list[str] = []
     if settings.ENABLE_KB_VALIDATION:
@@ -63,8 +65,9 @@ def run(recreate: bool = False) -> None:
         )
 
     upsert_product_cards(cards, recreate=recreate)
-    sku.save('/data/indexes/sku_index.json')
-    kits.save('/data/indexes/kit_index.json')
+    indexes_path = Path(settings.INDEXES_PATH)
+    sku.save(str(indexes_path / 'sku_index.json'))
+    kits.save(str(indexes_path / 'kit_index.json'))
 
     index_version = f"rag-{datetime.utcnow().strftime('%Y%m%d%H%M%S')}-{uuid4().hex[:8]}"
     session = SessionLocal()

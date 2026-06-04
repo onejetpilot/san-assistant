@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 from app.core.config import settings
 from app.core.llm_client import OpenAICompatibleLLMClient
@@ -31,10 +32,11 @@ class AnswerService:
     def __init__(self) -> None:
         self.rag = RagRetriever()
         self.docs = DocumentSearch()
-        self.sku = SkuIndex.load('/data/indexes/sku_index.json')
+        indexes_path = Path(settings.INDEXES_PATH)
+        self.sku = SkuIndex.load(str(indexes_path / 'sku_index.json'))
         if not self.sku.data:
             self.sku = SkuIndex.load('./data/indexes/sku_index.json')
-        self.kits = KitIndex.load('/data/indexes/kit_index.json')
+        self.kits = KitIndex.load(str(indexes_path / 'kit_index.json'))
         if not self.kits.data:
             self.kits = KitIndex.load('./data/indexes/kit_index.json')
         self.llm = OpenAICompatibleLLMClient()

@@ -9,6 +9,7 @@ import yaml
 from app.core.config import settings
 from app.core.chroma import get_chroma_client
 from app.storage.db import SessionLocal
+from app.storage.db import init_db
 from app.storage.models import DocumentIndexRun
 from app.documents.storage import get_storage_provider
 from app.core.embedding_client import EmbeddingClient
@@ -56,6 +57,7 @@ def build_document_index(docs: list[dict], recreate: bool = False) -> None:
 
 
 def run(recreate: bool = False) -> None:
+    init_db()
     docs = load_documents_metadata(settings.DOCUMENTS_METADATA_PATH)
     validate_documents_metadata(docs, settings.DOCUMENTS_REPO_PATH)
     build_document_index(docs, recreate=recreate)
