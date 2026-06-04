@@ -6,8 +6,8 @@ from app.core.config import settings
 from app.core.llm_client import OpenAICompatibleLLMClient
 from app.core.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.documents.document_search import DocumentSearch
-from app.indexes.sku_index import SkuIndex
-from app.indexes.kit_index import KitIndex
+from app.indexes.sku_index import SkuIndex, SkuRecord
+from app.indexes.kit_index import KitIndex, KitRecord
 from app.rag.retriever import RagRetriever
 from app.services.confidence import compute_confidence
 from app.services.conversation_memory import ConversationMemoryService
@@ -47,6 +47,34 @@ class AnswerService:
         for pat in INJECTION_PATTERNS:
             out = re.sub(pat, '[REMOVED]', out, flags=re.IGNORECASE)
         return out
+
+    @staticmethod
+    def _format_sku_answer(sku: SkuRecord) -> str:
+        lines = [
+            f"Артикул {sku.article}: {sku.product}.",
+            f"Бренд: {sku.brand}.",
+            f"Категория: {sku.category}.",
+        ]
+        if sku.article_type:
+            lines.append(f"Тип: {sku.article_type}.")
+        if sku.short_description:
+            lines.append(f"Характеристики: {sku.short_description}.")
+        return "\n".join(lines)
+
+    def _format_kit_answer(self, kit: KitRecord, sku: SkuRecord | None = None) -> str:
+        base_article = sku.article if sku else kit.kit_article
+        lines = [f"Состав комплекта {base_article}: " + "; ".join(kit.components) + "."]
+        described_components: list[str] = []
+        for component_article in kit.component_articles:
+            row = self.sku.lookup(component_article)
+            if not row:
+                continue
+            component_desc = (row.short_description or row.product).strip()
+            described_components.append(f"{row.article} — {component_desc}")
+        if described_components:
+            lines.append("Компоненты:")
+            lines.extend([f"- {x}" for x in described_components])
+        return "\n".join(lines)
 
     async def answer(self, query: str, session_id: str | None = None, answer_style: str = 'detailed') -> dict:
         started = now_ms()
@@ -100,6 +128,7 @@ class AnswerService:
 
         article = extract_article_candidate(resolved_query)
         sku_result = self.sku.lookup(article) if article else None
+        kit_from_global = self.kits.lookup(article) if article else None
 
         rag_results = self.rag.search(expanded_query)
         chroma_unavailable = not self.rag.available
@@ -144,7 +173,7 @@ class AnswerService:
             web_results = await self.web.search(resolved_query)
             used_web_search = bool(web_results)
 
-        conf = compute_confidence(bool(sku_result), [r.score for r in rag_results], bool(doc_results), used_web_only=used_web_search and not rag_results)
+        conf = compute_confidence(bool(sku_result or kit_from_global), [r.score for r in rag_results], bool(doc_results), used_web_only=used_web_search and not rag_results)
 
         answer_mode = 'short_answer'
         if intent in {'installation_question', 'warranty_question', 'compatibility_question'}:
@@ -174,43 +203,35 @@ class AnswerService:
             'состав',
             'что входит',
             'комплект',
+            'комплектац',
+            'набор',
             'в наборе',
         )
         asks_composition = slots.asks_composition or any(k in ql for k in composition_keywords)
         asks_dimension = slots.intent_hint == 'dimension'
         target_type = slots.item_type
-        if article:
-            kit_from_global = self.kits.lookup(article)
-        else:
-            kit_from_global = None
         kit_components = sku_result.kit_components if sku_result and sku_result.kit_components else []
         if not kit_components and kit_from_global:
             kit_components = kit_from_global.components
 
-        if (sku_result or kit_from_global) and kit_components and asks_composition:
-            base_article = sku_result.article if sku_result else kit_from_global.kit_article
-            lines = []
-            described_components: list[str] = []
-            component_articles = kit_from_global.component_articles if kit_from_global else []
-            if not component_articles and sku_result:
-                component_articles = [
-                    re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', c).group(1)
-                    for c in kit_components
-                    if re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', c)
-                ]
-            for component_article in component_articles:
-                row = self.sku.lookup(component_article)
-                if row:
-                    component_desc = (row.short_description or '').strip()
-                    if component_desc:
-                        described_components.append(f"{row.article} — {component_desc}")
-                    else:
-                        described_components.append(f"{row.article} — {row.product}")
-            lines.append(f"Состав комплекта {base_article}: " + '; '.join(kit_components) + '.')
-            if described_components:
-                lines.append("Компоненты:")
-                lines.extend([f"- {x}" for x in described_components])
-            answer = '\n'.join(lines)
+        if kit_from_global and (asks_composition or intent == 'article_lookup'):
+            answer = self._format_kit_answer(kit_from_global, sku_result)
+        elif sku_result and kit_components and asks_composition:
+            component_articles = [
+                re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', c).group(1)
+                for c in kit_components
+                if re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', c)
+            ]
+            kit = KitRecord(
+                kit_article=sku_result.article,
+                doc_id=sku_result.doc_id,
+                source_file=sku_result.source_file,
+                components=kit_components,
+                component_articles=component_articles,
+            )
+            answer = self._format_kit_answer(kit, sku_result)
+        elif sku_result and intent == 'article_lookup':
+            answer = self._format_sku_answer(sku_result)
 
         # Deterministic size answer by article type + dimension, to avoid mixing types (e.g. гильза vs муфта).
         if not answer and asks_dimension and target_type:
@@ -306,7 +327,7 @@ class AnswerService:
         if used_web_search and 'san.team' not in answer:
             answer += '\n\nЧасть информации найдена через поиск по сайту san.team.'
 
-        if conf['label'] == 'low' or (not sources and not documents and not sku_result):
+        if conf['label'] == 'low' or (not sources and not documents and not sku_result and not kit_from_global):
             save_knowledge_gap(
                 request_id=request_id,
                 original_query=query,

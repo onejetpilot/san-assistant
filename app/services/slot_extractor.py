@@ -63,7 +63,7 @@ def extract_slots(query: str) -> QuerySlots:
             slots.brand = b.upper()
             break
 
-    if any(x in ql for x in ['из чего состоит', 'состав', 'что входит', 'в наборе', 'комплект']):
+    if any(x in ql for x in ['из чего состоит', 'состав', 'что входит', 'в наборе', 'комплект', 'комплектац', 'набор']):
         slots.asks_composition = True
         slots.intent_hint = 'composition'
 
@@ -89,4 +89,3 @@ def extract_slots(query: str) -> QuerySlots:
             break
 
     return slots
-
