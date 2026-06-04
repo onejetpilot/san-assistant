@@ -1,7 +1,7 @@
 from pydantic import BaseModel
 from app.core.config import settings
 from app.core.chroma import get_chroma_client
-from app.core.embedding_client import EmbeddingClient
+from app.core.embedding_client import EmbeddingClient, EmbeddingNotConfiguredError
 
 
 class RetrievedChunk(BaseModel):
@@ -14,6 +14,9 @@ class RagRetriever:
     def __init__(self) -> None:
         self.available = True
         self.collection = None
+        if not EmbeddingClient.is_configured():
+            self.available = False
+            return
         try:
             self.client = get_chroma_client()
             self.collection = self.client.get_or_create_collection(settings.CHROMA_COLLECTION_PRODUCT_CHUNKS, embedding_function=None)
@@ -26,6 +29,9 @@ class RagRetriever:
         try:
             qv = EmbeddingClient().embed_texts_sync([query])[0]
             res = self.collection.query(query_embeddings=[qv], n_results=top_k or settings.TOP_K)
+        except EmbeddingNotConfiguredError:
+            self.available = False
+            return []
         except Exception:
             self.available = False
             return []
@@ -34,5 +40,7 @@ class RagRetriever:
         metas = res.get('metadatas', [[]])[0]
         dists = res.get('distances', [[]])[0]
         for d, m, dist in zip(docs, metas, dists):
-            out.append(RetrievedChunk(text=d, metadata=m or {}, score=1.0 - float(dist or 1.0)))
+            score = 1.0 - float(dist or 1.0)
+            if score >= settings.RAG_MIN_SCORE:
+                out.append(RetrievedChunk(text=d, metadata=m or {}, score=score))
         return out

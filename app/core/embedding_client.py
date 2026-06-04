@@ -3,14 +3,26 @@ import httpx
 from app.core.config import settings
 
 
+class EmbeddingNotConfiguredError(RuntimeError):
+    pass
+
+
 class EmbeddingClient:
     @staticmethod
-    def _fallback(texts: list[str]) -> list[list[float]]:
-        return [[0.0] * 8 for _ in texts]
+    def is_configured() -> bool:
+        return (
+            settings.EMBEDDING_PROVIDER == 'openai_compatible'
+            and bool(settings.EMBEDDING_API_KEY)
+            and bool(settings.EMBEDDING_BASE_URL)
+        )
+
+    @classmethod
+    def _ensure_configured(cls) -> None:
+        if not cls.is_configured():
+            raise EmbeddingNotConfiguredError('Embedding provider is not configured')
 
     async def embed_texts(self, texts: list[str]) -> list[list[float]]:
-        if settings.EMBEDDING_PROVIDER != 'openai_compatible' or not settings.EMBEDDING_API_KEY or not settings.EMBEDDING_BASE_URL:
-            return self._fallback(texts)
+        self._ensure_configured()
         async with httpx.AsyncClient(timeout=settings.LLM_TIMEOUT_SECONDS) as client:
             resp = await client.post(
                 f"{settings.EMBEDDING_BASE_URL.rstrip('/')}/embeddings",
@@ -21,8 +33,7 @@ class EmbeddingClient:
             return [item['embedding'] for item in resp.json()['data']]
 
     def embed_texts_sync(self, texts: list[str]) -> list[list[float]]:
-        if settings.EMBEDDING_PROVIDER != 'openai_compatible' or not settings.EMBEDDING_API_KEY or not settings.EMBEDDING_BASE_URL:
-            return self._fallback(texts)
+        self._ensure_configured()
         with httpx.Client(timeout=settings.LLM_TIMEOUT_SECONDS) as client:
             resp = client.post(
                 f"{settings.EMBEDDING_BASE_URL.rstrip('/')}/embeddings",
