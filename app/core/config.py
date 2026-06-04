@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     DOCUMENT_STORAGE_PROVIDER: str = 'github'
 
     TOP_K: int = 8
-    RAG_MIN_SCORE: float = 0.35
+    RAG_MIN_SCORE: float = 0.1
     RERANK_TOP_K: int = 5
     ENABLE_RERANKER: bool = False
     ENABLE_KB_VALIDATION: bool = False

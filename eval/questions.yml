@@ -1,6 +1,62 @@
 questions:
   - question: "Что за OXF01612?"
-    expected_contains: ["артикул"]
+    expected_contains: ["артикул", "OXF01612", "Фитинги аксиальные ONDO", "16х1/2", "37,5"]
     expected_article: "OXF01612"
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+    expected_answer_mode: "short_answer"
+    expected_confidence: "high"
+
+  - question: "Что за OXS00016?"
+    expected_contains: ["артикул", "OXS00016", "Фитинги аксиальные ONDO", "внутренний диаметр", "16"]
+    expected_article: "OXS00016"
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+    expected_answer_mode: "short_answer"
+    expected_confidence: "high"
+
+  - question: "Из чего состоит комплект OXF01612K10G?"
+    expected_contains: ["Состав комплекта OXF01612K10G", "10 шт OXF01612", "10 шт OXS00016"]
+    expected_article: "OXF01612K10G"
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+    expected_answer_mode: "short_answer"
+    expected_confidence: "high"
+
+  - question: "Что входит в набор OXF02012K01G?"
+    expected_contains: ["Состав комплекта OXF02012K01G", "1 шт OXF02012", "1 шт OXS00020"]
+    expected_article: "OXF02012K01G"
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+    expected_answer_mode: "short_answer"
+    expected_confidence: "high"
+
+  - question: "Для чего предназначены аксиальные фитинги ONDO?"
+    expected_contains: ["PEX", "EVOH", "водоснабжения", "отопления"]
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+
+  - question: "Можно ли замоноличивать аксиальные фитинги ONDO?"
+    expected_contains: ["допуска", "замонолич"]
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+
+  - question: "Какая температура рабочей среды у аксиальных фитингов ONDO?"
+    expected_contains: ["+5", "+95", "+110"]
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+
+  - question: "Какая гарантия на аксиальные фитинги ONDO?"
+    expected_contains: ["84 месяца"]
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+
+  - question: "Из какого материала корпус аксиальных фитингов ONDO?"
+    expected_contains: ["горячештампован", "латун"]
+    expected_documents: false
+    forbidden_contains: ["не знаю"]
+
+  - question: "Какие ограничения у аксиальных фитингов ONDO?"
+    expected_contains: ["Не допускается замораживание"]
     expected_documents: false
     forbidden_contains: ["не знаю"]

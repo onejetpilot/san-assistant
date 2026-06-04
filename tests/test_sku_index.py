@@ -54,3 +54,24 @@ def test_extract_single_component_kit():
     row = idx.lookup('OXS00016K10')
     assert row is not None
     assert row.kit_components == ['10 шт OXS00016']
+
+
+def test_regular_variant_description_is_not_kit_components():
+    d = ParsedRagDocument(
+        source_file='x',
+        doc_id='d1',
+        product='P',
+        category='C',
+        brand='B',
+        articles=[ArticleItem(original='OXF01612', normalized='OXF01612')],
+        sections={
+            'VARIANTS (АРТИКУЛЫ)': RagSection(
+                name='VARIANTS (АРТИКУЛЫ)',
+                content='OXF01612 - диаметр(мм х дюйм) 16х1/2, длина(мм) 37,5',
+            ),
+        },
+    )
+    idx = build_sku_index([d])
+    row = idx.lookup('OXF01612')
+    assert row is not None
+    assert row.kit_components == []

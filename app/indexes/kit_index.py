@@ -70,6 +70,9 @@ def build_kit_index(docs: list[ParsedRagDocument]) -> KitIndex:
 
 
 def _extract_components(rhs: str) -> list[str]:
+    if 'шт' not in rhs.lower():
+        return []
+
     parts: list[str] = []
     for chunk in rhs.split('+'):
         token = re.sub(r'\s+', ' ', chunk.strip())

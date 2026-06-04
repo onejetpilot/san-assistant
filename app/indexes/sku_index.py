@@ -93,6 +93,9 @@ def _extract_variant_lines(text: str) -> dict[str, str]:
 def _extract_kit_components(variant_desc: str) -> list[str]:
     if not variant_desc:
         return []
+    if 'шт' not in variant_desc.lower():
+        return []
+
     parts: list[str] = []
     for chunk in variant_desc.split('+'):
         token = chunk.strip()
