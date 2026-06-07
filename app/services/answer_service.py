@@ -28,6 +28,7 @@ from app.services.routing.rag_quality import (
 from app.services.routing.observability import log_routing_decision
 from app.services.routing.preprocessor import build_routing_context
 from app.services.slot_extractor import extract_slots
+from app.services.tool_payload import build_tool_payload, empty_results_payload
 from app.storage.repository import save_chat_request, save_knowledge_gap, get_current_index_versions
 from app.utils.ids import gen_request_id
 from app.utils.text import extract_article_candidate
@@ -119,6 +120,7 @@ class AnswerService:
         if not any(x in q for x in [
             'встанет', 'влезет', 'подойд', 'подходит', 'совместим',
             'плотно', 'сидеть', 'сядет', 'под трубу', 'под трубку', 'трубка',
+            'для какой трубы', 'стенк',
         ]):
             return ''
 
@@ -128,8 +130,8 @@ class AnswerService:
 
         supports_16_22 = re.search(r'16\s*мм[^\n.]+2[,.]2\s*мм', context, flags=re.IGNORECASE)
         supports_20_28 = re.search(r'20\s*мм[^\n.]+2[,.]8\s*мм', context, flags=re.IGNORECASE)
-        asks_16_20 = re.search(r'16\s*[xх/]\s*2[,.]0', q)
-        asks_16_22 = re.search(r'16\s*[xх/]\s*2[,.]2', q)
+        asks_16_20 = re.search(r'16\s*[xх/]\s*2[,.]0', q) or ('16' in q and re.search(r'2[,.]0', q))
+        asks_16_22 = re.search(r'16\s*[xх/]\s*2[,.]2', q) or ('16' in q and re.search(r'2[,.]2', q))
         asks_16_26 = re.search(r'16\s*[xх/]\s*2[,.]6', q)
         asks_20_28 = re.search(r'20\s*[xх/]\s*2[,.]8', q)
         asks_inner_157 = 'внутрен' in q and re.search(r'15[,.]7', q)
@@ -150,6 +152,11 @@ class AnswerService:
                 "Подбор по внутреннему диаметру в базе не подтвержден."
             )
 
+        if asks_16_20 and asks_16_22 and supports_16_22:
+            return (
+                "Из этих вариантов по базе знаний подтверждена труба 16x2,2 мм. "
+                "Для трубы 16x2,0 мм подтверждения в базе нет."
+            )
         if asks_16_20 and supports_16_22:
             return (
                 "По базе знаний для аксиальных фитингов ONDO указана совместимость с трубой "
@@ -196,7 +203,7 @@ class AnswerService:
 
         if 'шаг резьб' in q:
             if 'Тип резьбы: трубная' in context:
-                return "В базе знаний указан тип резьбы: трубная. Точный шаг резьбы (например 1,25 или 1,5) в базе не указан."
+                return "В базе знаний указан тип резьбы: трубная. Точный шаг резьбы в базе не указан."
             return "Точный шаг резьбы в базе знаний не указан."
 
         if 'марка' in q and 'латун' in q:
@@ -277,6 +284,7 @@ class AnswerService:
                 'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
                 'answer_mode': 'clarify', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'low', 'tools_used': ['clarify'],
+                'retrieval_trace': [],
                 'route': router,
             }
             self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'ambiguous_question', 'answer_mode': 'clarify'})
@@ -290,6 +298,7 @@ class AnswerService:
                 'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
                 'answer_mode': 'not_enough_data', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'high', 'tools_used': ['refuse'],
+                'retrieval_trace': [],
                 'route': router,
             }
             self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent})
@@ -404,6 +413,17 @@ class AnswerService:
             'score': r.score,
         } for r in display_rag[:5]]
         documents = [{'title': d['title'], 'type': d['type'], 'product': d['product'], 'brand': d['brand'], 'public_url': d['public_url']} for d in doc_results]
+        retrieval_trace = self._build_retrieval_trace(
+            query=resolved_query,
+            article=article,
+            sku_result=sku_result,
+            kit_from_global=kit_from_global,
+            rag_results=display_rag,
+            documents=documents,
+            web_results=web_results,
+            tools_called=tools_called,
+            empty_results=empty_results,
+        )
 
         # LLM fallback-safe answer
         answer = ''
@@ -608,6 +628,7 @@ class AnswerService:
             'web_results': web_results,
             'confidence': conf['label'],
             'tools_used': tools_called or tools,
+            'retrieval_trace': retrieval_trace,
             'route': router,
         }
 
@@ -655,3 +676,118 @@ class AnswerService:
             await evaluate_answer({'query': resolved_query, 'answer': answer, 'sources': sources})
 
         return response
+
+    @staticmethod
+    def _build_retrieval_trace(
+        query: str,
+        article: str | None,
+        sku_result: SkuRecord | None,
+        kit_from_global: KitRecord | None,
+        rag_results: list,
+        documents: list[dict],
+        web_results: list,
+        tools_called: list[str],
+        empty_results: list[str],
+    ) -> list[dict]:
+        trace: list[dict] = []
+
+        if 'sku_lookup' in tools_called:
+            if sku_result:
+                trace.append(build_tool_payload(
+                    query=article or query,
+                    results=[sku_result.model_dump()],
+                    meta={'tool': 'sku_lookup'},
+                    mode='exact_article',
+                ))
+            else:
+                trace.append(empty_results_payload(
+                    query=article or query,
+                    note='Exact article was not found in SKU index.',
+                    meta={'tool': 'sku_lookup'},
+                    mode='exact_article',
+                ))
+
+        if 'kit_lookup' in tools_called:
+            if kit_from_global:
+                trace.append(build_tool_payload(
+                    query=article or query,
+                    results=[kit_from_global.model_dump()],
+                    meta={'tool': 'kit_lookup'},
+                    mode='exact_kit_article',
+                ))
+            else:
+                trace.append(empty_results_payload(
+                    query=article or query,
+                    note='Exact kit article was not found in kit index.',
+                    meta={'tool': 'kit_lookup'},
+                    mode='exact_kit_article',
+                ))
+
+        if 'rag_search' in tools_called:
+            rag_payloads = []
+            for chunk in rag_results[:5]:
+                metadata = getattr(chunk, 'metadata', {}) or {}
+                rag_payloads.append({
+                    'doc_id': metadata.get('doc_id', ''),
+                    'product': metadata.get('product', ''),
+                    'section_group': metadata.get('section_group', ''),
+                    'section': metadata.get('section', ''),
+                    'source_file': metadata.get('source_file', ''),
+                    'score': getattr(chunk, 'score', 0),
+                })
+            if rag_payloads:
+                trace.append(build_tool_payload(
+                    query=query,
+                    results=rag_payloads,
+                    meta={'tool': 'rag_search'},
+                    mode='section_aware_chunks',
+                ))
+            else:
+                trace.append(empty_results_payload(
+                    query=query,
+                    note='No RAG chunks passed retrieval filters.',
+                    meta={'tool': 'rag_search'},
+                    mode='section_aware_chunks',
+                ))
+
+        if 'document_search' in tools_called:
+            if documents:
+                trace.append(build_tool_payload(
+                    query=query,
+                    results=documents,
+                    meta={'tool': 'document_search'},
+                    mode='document_index',
+                ))
+            else:
+                trace.append(empty_results_payload(
+                    query=query,
+                    note='No matching documents found.',
+                    meta={'tool': 'document_search'},
+                    mode='document_index',
+                ))
+
+        if 'san_team_search' in tools_called:
+            if web_results:
+                trace.append(build_tool_payload(
+                    query=query,
+                    results=web_results,
+                    meta={'tool': 'san_team_search'},
+                    mode='site_search',
+                ))
+            else:
+                trace.append(empty_results_payload(
+                    query=query,
+                    note='Site search returned no results.',
+                    meta={'tool': 'san_team_search'},
+                    mode='site_search',
+                ))
+
+        if 'fallback' in tools_called:
+            trace.append(empty_results_payload(
+                query=query,
+                note='No reliable local context was found; fallback answer was used.',
+                meta={'tool': 'fallback', 'empty_tools': empty_results},
+                mode='no_context',
+            ))
+
+        return trace

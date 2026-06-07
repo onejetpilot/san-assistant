@@ -85,6 +85,7 @@ def extract_slots(query: str) -> QuerySlots:
     if any(x in ql for x in [
         'встанет', 'влезет', 'подойд', 'подходит', 'совместим', 'имеет ли значение', 'отличи',
         'плотно', 'сидеть', 'сядет', 'под трубу', 'под трубку', 'трубка',
+        'для какой трубы', 'стенк',
     ]):
         slots.asks_compatibility = True
         if slots.intent_hint == 'generic':

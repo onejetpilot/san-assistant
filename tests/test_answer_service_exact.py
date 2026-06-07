@@ -120,6 +120,23 @@ def test_format_pipe_compatibility_answer_prefers_16x22_over_16x26():
     assert 'подтверждения в базе нет' in answer
 
 
+def test_format_pipe_compatibility_answer_prefers_16x22_over_16x20():
+    chunk = RetrievedChunk(
+        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
+        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
+        score=0.5,
+    )
+
+    answer = AnswerService._format_pipe_compatibility_answer(
+        'Для какой трубы 16 со стенкой 2,0 или 2,2?',
+        [chunk],
+    )
+
+    assert 'подтверждена труба 16x2,2 мм' in answer
+    assert '16x2,0 мм' in answer
+    assert 'подтверждения в базе нет' in answer
+
+
 def test_format_pipe_compatibility_answer_explains_inner_diameter_is_not_spec():
     chunk = RetrievedChunk(
         text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',

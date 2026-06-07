@@ -65,6 +65,8 @@ def test_article_lookup_uses_sku_not_llm(service):
     resp = asyncio.run(service.answer('Что за OXF01612?', answer_style='short'))
     assert 'OXF01612' in resp['answer']
     assert 'sku_lookup' in resp['tools_used']
+    assert resp['retrieval_trace'][0]['meta']['tool'] == 'sku_lookup'
+    assert resp['retrieval_trace'][0]['status'] == 'ok'
     assert 'LLM_SHOULD_NOT_BE_CALLED' not in resp['answer']
 
 
