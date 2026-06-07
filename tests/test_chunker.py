@@ -14,3 +14,24 @@ def test_chunker_sections_metadata():
     assert chunks
     assert chunks[0].metadata['product'] == 'P'
     assert chunks[0].metadata['brand'] == 'B'
+
+
+def test_chunker_builds_article_row_chunks_for_variants():
+    d = ParsedRagDocument(
+        source_file='x.txt', document='x', doc_id='d1', product='P', category='C', brand='B',
+        sections={
+            'VARIANTS (АРТИКУЛЫ)': RagSection(
+                name='VARIANTS (АРТИКУЛЫ)',
+                content='- OXF01612K01G - 2 шт OXF01612 + 1 шт OXS00016\n[НЕТ ДАННЫХ В ИСХОДНОМ ДОКУМЕНТЕ]',
+            ),
+        },
+    )
+
+    chunks = build_chunks(d)
+    row_chunks = [c for c in chunks if c.metadata['section_group'] == 'article_row']
+
+    assert len(row_chunks) == 1
+    assert row_chunks[0].metadata['article'] == 'OXF01612K01G'
+    assert row_chunks[0].metadata['article_normalized'] == 'OXF01612K01G'
+    assert row_chunks[0].metadata['is_kit'] is True
+    assert '2 шт OXF01612' in row_chunks[0].text

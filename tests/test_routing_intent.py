@@ -28,6 +28,13 @@ def test_article_lookup_by_number():
     assert 'sku_lookup' in d.tools_to_call
 
 
+def test_composition_question_with_article_uses_kit_lookup():
+    d = _route('Из чего состоит комплект OXF01612K10G?')
+    assert d.intent == 'article_lookup'
+    assert 'sku_lookup' in d.tools_to_call
+    assert 'kit_lookup' in d.tools_to_call
+
+
 def test_dimension_question_with_article_uses_sku_lookup():
     d = _route('Какая длина OXS00016?')
     assert d.intent == 'knowledge_base_question'

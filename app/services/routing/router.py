@@ -24,7 +24,7 @@ class QueryRouter:
             'knowledge_base_question, installation_or_usage_question, warranty_question, '
             'comparison_question, price_or_availability_question, web_search_needed, '
             'ambiguous_question, out_of_scope, follow_up. '
-            'Allowed tools: sku_lookup, rag_search, document_search, san_team_search, clarify, refuse. '
+            'Allowed tools: sku_lookup, kit_lookup, rag_search, document_search, san_team_search, clarify, refuse. '
             f'User query: {ctx.resolved_query}'
         )
         try:

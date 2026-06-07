@@ -219,9 +219,15 @@ class AnswerService:
         if route.uses_tool('sku_lookup') and article:
             tools_called.append('sku_lookup')
             sku_result = self.sku.lookup(article)
-            kit_from_global = self.kits.lookup(article)
-            if not sku_result and not kit_from_global:
+            if not sku_result:
                 empty_results.append('sku_lookup')
+        if route.uses_tool('kit_lookup') and article:
+            tools_called.append('kit_lookup')
+            kit_from_global = self.kits.lookup(article)
+            if not kit_from_global:
+                empty_results.append('kit_lookup')
+        elif article and not kit_from_global:
+            kit_from_global = self.kits.lookup(article)
 
         rag_results: list = []
         chroma_unavailable = not self.rag.available
