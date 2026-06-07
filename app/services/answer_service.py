@@ -20,6 +20,8 @@ from app.services.routing.rag_quality import (
     has_strong_rag_context,
     has_weak_rag_context,
     chunks_for_llm,
+    preferred_section_groups,
+    prioritize_chunks,
     build_no_context_fallback,
     KB_SYNTHESIS_INTENTS,
 )
@@ -236,6 +238,8 @@ class AnswerService:
             rag_results = self.rag.search(expanded_query)
             if not rag_results:
                 empty_results.append('rag_search')
+        section_groups = preferred_section_groups(intent, slots)
+        rag_results = prioritize_chunks(rag_results, section_groups)
         rag_results_strong = filter_relevant_chunks(rag_results)
 
         doc_type = None
@@ -443,7 +447,7 @@ class AnswerService:
         rag_only_intents = {'knowledge_base_question', 'installation_or_usage_question', 'warranty_question'}
         try:
             if not answer:
-                rag_for_prompt = chunks_for_llm(rag_results, intent)
+                rag_for_prompt = chunks_for_llm(rag_results, intent, slots)
                 if intent in rag_only_intents and not rag_for_prompt and not sku_result and not documents:
                     answer = build_no_context_fallback(intent)
                     fallback_used = True

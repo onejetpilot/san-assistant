@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from app.core.config import settings
 from app.rag.retriever import RetrievedChunk
+from app.services.slot_extractor import QuerySlots
 
 # Strong relevance threshold for LLM synthesis; below this we prefer fallback.
 RAG_STRONG_SCORE = max(settings.RAG_MIN_SCORE, 0.35)
@@ -15,6 +16,18 @@ KB_SYNTHESIS_INTENTS = frozenset({
     'comparison_question',
     'follow_up',
 })
+
+SECTION_PRIORITY_SCORE = 0.08
+
+SECTION_HINTS_BY_INTENT = {
+    'installation_or_usage_question': ['installation', 'faq', 'overview'],
+    'warranty_question': ['warranty_storage', 'faq', 'overview'],
+    'document_request': ['overview', 'articles'],
+    'article_lookup': ['article_row', 'articles', 'technical'],
+    'product_question': ['article_row', 'articles', 'overview', 'technical'],
+    'comparison_question': ['article_row', 'articles', 'technical', 'overview'],
+    'price_or_availability_question': ['article_row', 'articles'],
+}
 
 
 def filter_relevant_chunks(chunks: list[RetrievedChunk], min_score: float | None = None) -> list[RetrievedChunk]:
@@ -30,15 +43,54 @@ def has_weak_rag_context(chunks: list[RetrievedChunk]) -> bool:
     return bool([c for c in chunks if c.score >= RAG_WEAK_SCORE])
 
 
-def chunks_for_llm(chunks: list[RetrievedChunk], intent: str) -> list[RetrievedChunk]:
-    strong = filter_relevant_chunks(chunks)
+def preferred_section_groups(intent: str, slots: QuerySlots | None = None) -> list[str]:
+    groups = list(SECTION_HINTS_BY_INTENT.get(intent, []))
+    if intent in KB_SYNTHESIS_INTENTS or intent == 'knowledge_base_question':
+        if slots and slots.asks_warranty:
+            groups.extend(['warranty_storage', 'faq'])
+        if slots and slots.asks_installation:
+            groups.extend(['installation', 'faq'])
+        if slots and slots.asks_limitations:
+            groups.extend(['installation', 'overview', 'faq'])
+        if slots and slots.asks_composition:
+            groups.extend(['article_row', 'articles'])
+        if slots and (slots.dimension_name or slots.asks_compatibility or slots.asks_articles_list):
+            groups.extend(['article_row', 'articles', 'technical'])
+        if not groups:
+            groups.extend(['technical', 'overview', 'faq'])
+    return list(dict.fromkeys(groups))
+
+
+def prioritize_chunks(chunks: list[RetrievedChunk], section_groups: list[str] | None = None) -> list[RetrievedChunk]:
+    if not section_groups:
+        return sorted(chunks, key=lambda c: c.score, reverse=True)
+    priority = {group: idx for idx, group in enumerate(section_groups)}
+
+    def sort_key(chunk: RetrievedChunk) -> tuple[float, int]:
+        group = str(chunk.metadata.get('section_group', ''))
+        boost = 0.0
+        if group in priority:
+            boost = SECTION_PRIORITY_SCORE * (len(priority) - priority[group])
+        boosted_score = chunk.score + boost
+        group_rank = priority.get(group, len(priority))
+        return boosted_score, -group_rank
+
+    return sorted(chunks, key=sort_key, reverse=True)
+
+
+def chunks_for_llm(
+    chunks: list[RetrievedChunk],
+    intent: str,
+    slots: QuerySlots | None = None,
+) -> list[RetrievedChunk]:
+    section_groups = preferred_section_groups(intent, slots)
+    strong = prioritize_chunks(filter_relevant_chunks(chunks), section_groups)
     if strong:
         return strong[:5]
     if intent in KB_SYNTHESIS_INTENTS and has_weak_rag_context(chunks):
-        return sorted(
+        return prioritize_chunks(
             [c for c in chunks if c.score >= RAG_WEAK_SCORE],
-            key=lambda c: c.score,
-            reverse=True,
+            section_groups,
         )[:5]
     return []
 
