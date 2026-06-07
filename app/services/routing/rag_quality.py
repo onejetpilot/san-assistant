@@ -5,6 +5,16 @@ from app.rag.retriever import RetrievedChunk
 
 # Strong relevance threshold for LLM synthesis; below this we prefer fallback.
 RAG_STRONG_SCORE = max(settings.RAG_MIN_SCORE, 0.35)
+# Weak but usable context for KB technical questions (e.g. sleeve dimensions in variants section).
+RAG_WEAK_SCORE = max(settings.RAG_MIN_SCORE, 0.15)
+
+KB_SYNTHESIS_INTENTS = frozenset({
+    'knowledge_base_question',
+    'installation_or_usage_question',
+    'warranty_question',
+    'comparison_question',
+    'follow_up',
+})
 
 
 def filter_relevant_chunks(chunks: list[RetrievedChunk], min_score: float | None = None) -> list[RetrievedChunk]:
@@ -14,6 +24,23 @@ def filter_relevant_chunks(chunks: list[RetrievedChunk], min_score: float | None
 
 def has_strong_rag_context(chunks: list[RetrievedChunk]) -> bool:
     return bool(filter_relevant_chunks(chunks))
+
+
+def has_weak_rag_context(chunks: list[RetrievedChunk]) -> bool:
+    return bool([c for c in chunks if c.score >= RAG_WEAK_SCORE])
+
+
+def chunks_for_llm(chunks: list[RetrievedChunk], intent: str) -> list[RetrievedChunk]:
+    strong = filter_relevant_chunks(chunks)
+    if strong:
+        return strong[:5]
+    if intent in KB_SYNTHESIS_INTENTS and has_weak_rag_context(chunks):
+        return sorted(
+            [c for c in chunks if c.score >= RAG_WEAK_SCORE],
+            key=lambda c: c.score,
+            reverse=True,
+        )[:5]
+    return []
 
 
 def top_rag_score(chunks: list[RetrievedChunk]) -> float:

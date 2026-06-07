@@ -51,6 +51,9 @@
     {"id": "hist_001", "query": "А паспорт на него есть?", "history": {"current_article": "OXF01612", "current_product": "Фитинги ONDO"}, "expected_intent": "document_request", "expected_route": "document_lookup", "must_call_tools": ["document_search"], "must_not_call_tools": ["refuse"], "expected_behavior": "Follow-up документ"},
     {"id": "hist_002", "query": "А чем он отличается от второго?", "history": {"current_article": "OXF01612", "current_product": "Фитинг"}, "expected_intent": "comparison_question", "expected_route": "hybrid", "must_call_tools": ["rag_search"], "must_not_call_tools": ["refuse"], "expected_behavior": "Follow-up сравнение"},
     {"id": "hist_003", "query": "Подойдет ли он для квартиры?", "history": {"current_product": "Насос ONDO", "current_brand": "ONDO"}, "expected_intent": "follow_up", "expected_route": "hybrid", "must_call_tools": ["rag_search"], "must_not_call_tools": ["refuse"], "expected_behavior": "Follow-up применение"},
-    {"id": "hist_004", "query": "А цена?", "history": {"current_article": "OXF01612"}, "expected_intent": "price_or_availability_question", "expected_route": "hybrid", "must_call_tools": ["rag_search"], "must_not_call_tools": ["refuse"], "expected_behavior": "Follow-up цена"}
+    {"id": "hist_004", "query": "А цена?", "history": {"current_article": "OXF01612"}, "expected_intent": "price_or_availability_question", "expected_route": "hybrid", "must_call_tools": ["rag_search"], "must_not_call_tools": ["refuse"], "expected_behavior": "Follow-up цена"},
+
+    {"id": "sleeve_001", "query": "гильза аксиальная 16, какая длина?", "history": [], "expected_intent": "knowledge_base_question", "expected_route": "rag_answer", "must_call_tools": ["rag_search"], "must_not_call_tools": ["sku_lookup"], "expected_behavior": "Технический вопрос о длине гильзы"},
+    {"id": "sleeve_002", "query": "Так гильза встанет в трубу 16x2,0?", "history": [], "expected_intent": "knowledge_base_question", "expected_route": "rag_answer", "must_call_tools": ["rag_search"], "must_not_call_tools": ["sku_lookup"], "expected_behavior": "Совместимость гильзы с трубой"}
   ]
 }

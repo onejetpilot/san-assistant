@@ -96,3 +96,41 @@ def test_kb_answer_never_calls_llm_without_context(service):
 def test_price_does_not_call_web_without_explicit_intent(service):
     resp = asyncio.run(service.answer('Сколько стоит фильтр грубой очистки?'))
     assert 'san_team_search' not in resp['tools_used']
+
+
+def test_sleeve_length_routes_to_kb_not_product_selection():
+    d = _route('гильза аксиальная 16, какая длина?')
+    assert d.intent == 'knowledge_base_question'
+    assert d.selected_route == 'rag_answer'
+    assert 'sku_lookup' not in d.tools_to_call
+
+
+def test_sleeve_compatibility_routes_to_kb():
+    d = _route('Так гильза встанет в трубу 16x2,0?')
+    assert d.intent == 'knowledge_base_question'
+
+
+def test_pipe_difference_routes_to_comparison_or_kb():
+    d = _route('В чем отличие: труба 16/2,0 или 2,2? Гильза со стороны наружной, имеет ли значение такой фитинг?')
+    assert d.intent in {'comparison_question', 'knowledge_base_question'}
+    assert 'rag_search' in d.tools_to_call
+
+
+def test_weak_rag_allows_llm_for_kb(service, monkeypatch):
+    from app.rag.retriever import RetrievedChunk
+
+    weak_chunk = RetrievedChunk(
+        text='VARIANTS гильза 16 длина 24 мм',
+        metadata={'product': 'Фитинги аксиальные ONDO', 'section': 'VARIANTS', 'doc_id': 'ondo'},
+        score=0.18,
+    )
+    service.rag.search = lambda q: [weak_chunk]
+
+    async def _llm(system, user, **k):
+        return 'Гильза аксиальная 16 имеет длину 24 мм по данным каталога.'
+
+    service.llm.chat = _llm
+    resp = asyncio.run(service.answer('гильза аксиальная 16, какая длина?'))
+    assert resp['answer_mode'] == 'technical_answer'
+    assert 'llm' in resp['tools_used']
+    assert 'В каталоге не нашёл' not in resp['answer']

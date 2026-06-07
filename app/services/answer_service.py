@@ -18,7 +18,10 @@ from app.services.routing.router import route_query
 from app.services.routing.rag_quality import (
     filter_relevant_chunks,
     has_strong_rag_context,
+    has_weak_rag_context,
+    chunks_for_llm,
     build_no_context_fallback,
+    KB_SYNTHESIS_INTENTS,
 )
 from app.services.routing.observability import log_routing_decision
 from app.services.routing.preprocessor import build_routing_context
@@ -244,9 +247,9 @@ class AnswerService:
             answer_mode = 'document_answer'
         if intent == 'comparison_question' or 'сравн' in ql:
             answer_mode = 'comparison_answer'
-        if intent in {'product_question', 'price_or_availability_question'} or 'подоб' in ql or 'выбрать' in ql:
+        if intent in {'product_question', 'price_or_availability_question'} or ('подоб' in ql and intent != 'knowledge_base_question'):
             answer_mode = 'selection_answer'
-        if intent == 'knowledge_base_question':
+        if intent in {'knowledge_base_question', 'comparison_question', 'follow_up'}:
             answer_mode = 'technical_answer'
 
         display_rag = rag_results_strong or rag_results
@@ -273,7 +276,7 @@ class AnswerService:
             'в наборе',
         )
         asks_composition = slots.asks_composition or any(k in ql for k in composition_keywords)
-        asks_dimension = slots.intent_hint == 'dimension'
+        asks_dimension = slots.intent_hint == 'dimension' or slots.dimension_name in {'length', 'dimension'}
         target_type = slots.item_type
         kit_components = sku_result.kit_components if sku_result and sku_result.kit_components else []
         if not kit_components and kit_from_global:
@@ -362,7 +365,10 @@ class AnswerService:
                 f"- {d['title']} ({d['type']}): {d['public_url']}" for d in documents[:5]
             )
 
-        has_evidence = bool(sku_result or kit_from_global or documents or has_strong_rag_context(rag_results) or web_results)
+        rag_usable = has_strong_rag_context(rag_results) or (
+            intent in KB_SYNTHESIS_INTENTS and has_weak_rag_context(rag_results)
+        )
+        has_evidence = bool(sku_result or kit_from_global or documents or rag_usable or web_results)
         if not answer and not has_evidence and route.fallback_allowed:
             answer = build_no_context_fallback(intent)
             fallback_used = True
@@ -371,7 +377,7 @@ class AnswerService:
         rag_only_intents = {'knowledge_base_question', 'installation_or_usage_question', 'warranty_question'}
         try:
             if not answer:
-                rag_for_prompt = rag_results_strong if rag_results_strong else []
+                rag_for_prompt = chunks_for_llm(rag_results, intent)
                 if intent in rag_only_intents and not rag_for_prompt and not sku_result and not documents:
                     answer = build_no_context_fallback(intent)
                     fallback_used = True

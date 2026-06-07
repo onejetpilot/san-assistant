@@ -38,6 +38,7 @@ class QuerySlots(BaseModel):
     asks_installation: bool = False
     asks_limitations: bool = False
     asks_warranty: bool = False
+    asks_compatibility: bool = False
 
 
 def extract_slots(query: str) -> QuerySlots:
@@ -49,7 +50,7 @@ def extract_slots(query: str) -> QuerySlots:
             slots.item_type = v
             break
 
-    if 'длина' in ql:
+    if 'длина' in ql or 'длиной' in ql:
         slots.dimension_name = 'length'
     elif 'диаметр' in ql or 'размер' in ql:
         slots.dimension_name = 'dimension'
@@ -80,6 +81,11 @@ def extract_slots(query: str) -> QuerySlots:
 
     if slots.dimension_name:
         slots.intent_hint = 'dimension'
+
+    if any(x in ql for x in ['встанет', 'влезет', 'подойд', 'подходит', 'совместим', 'имеет ли значение', 'отличи']):
+        slots.asks_compatibility = True
+        if slots.intent_hint == 'generic':
+            slots.intent_hint = 'compatibility'
 
     if any(x in ql for x in ['монтаж', 'установк', 'подключ']):
         slots.asks_installation = True

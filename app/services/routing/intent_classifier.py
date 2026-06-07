@@ -35,7 +35,8 @@ PRICE_MARKERS = ['сколько стоит', 'цена', 'стоимость', 
 KNOWLEDGE_MARKERS = [
     'как подобрать', 'почему падает', 'почему не', 'что делать если',
     'как работает', 'для чего', 'можно ли', 'допускается ли',
-    'какая температура', 'какой диаметр', 'какой размер',
+    'какая температура', 'какой диаметр', 'какой размер', 'какая длина',
+    'имеет ли значение', 'в чем отличие', 'встанет', 'влезет', 'подойд',
 ]
 AMBIGUOUS_PATTERNS = [
     'подбери это', 'подойдет ли', 'подойдёт ли', 'можно такой',
@@ -59,6 +60,17 @@ def _find_article_token(query: str) -> str | None:
         if _looks_like_article(token):
             return normalize_article(token)
     return None
+
+
+def _is_technical_spec_question(ctx: RoutingContext) -> bool:
+    q = ctx.normalized_query
+    if ctx.slots.asks_compatibility or ctx.slots.intent_hint == 'compatibility':
+        return True
+    if ctx.slots.dimension_name and any(w in q for w in ['какая', 'какой', 'какие', 'сколько', '?']):
+        return True
+    if ctx.slots.item_type and any(m in q for m in ['какая длина', 'какой диаметр', 'какой размер', 'длина']):
+        return True
+    return False
 
 
 def _is_ambiguous(ctx: RoutingContext) -> bool:
@@ -107,6 +119,13 @@ def classify_intent(ctx: RoutingContext) -> tuple[str, float, str]:
     if any(m in q for m in COMPARISON_MARKERS):
         return 'comparison_question', 0.9, 'comparison_marker'
 
+    if (
+        ctx.has_conversation_context
+        and ctx.slots.asks_compatibility
+        and re.search(r'\b(он|она|оно|этот|эта|эти|него|неё)\b', q)
+    ):
+        return 'follow_up', 0.82, 'follow_up_compatibility'
+
     if any(m in q for m in PRICE_MARKERS):
         return 'price_or_availability_question', 0.88, 'price_marker'
 
@@ -119,6 +138,9 @@ def classify_intent(ctx: RoutingContext) -> tuple[str, float, str]:
     )
     if asks_doc_file:
         return 'document_request', 0.92, 'document_marker'
+
+    if _is_technical_spec_question(ctx):
+        return 'knowledge_base_question', 0.87, 'technical_spec_question'
 
     if any(m in q for m in KNOWLEDGE_MARKERS) or ctx.slots.asks_limitations:
         return 'knowledge_base_question', 0.78, 'knowledge_base_marker'
@@ -136,8 +158,15 @@ def classify_intent(ctx: RoutingContext) -> tuple[str, float, str]:
             return 'article_lookup', 0.91, 'find_by_article'
         return 'article_lookup', 0.88, 'article_token_detected'
 
-    if any(m in q for m in SELECTION_MARKERS) or ctx.slots.asks_articles_list or ctx.slots.item_type:
+    if any(m in q for m in SELECTION_MARKERS) or ctx.slots.asks_articles_list:
         return 'product_question', 0.84, 'product_selection_marker'
+
+    if ctx.slots.item_type and ctx.slots.asks_articles_list:
+        return 'product_question', 0.84, 'product_item_type_list'
+
+    if ctx.slots.item_type and not _is_technical_spec_question(ctx):
+        if any(m in q for m in SELECTION_MARKERS):
+            return 'product_question', 0.84, 'product_item_type_selection'
 
     if ctx.depends_on_history or any(m in q for m in FOLLOW_UP_MARKERS):
         if ctx.has_conversation_context or ctx.depends_on_history:
