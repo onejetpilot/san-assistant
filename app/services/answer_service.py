@@ -14,7 +14,14 @@ from app.services.confidence import compute_confidence
 from app.services.conversation_memory import ConversationMemoryService
 from app.services.query_expander import QueryExpander
 from app.services.query_resolver import resolve_query
-from app.services.router import route_query
+from app.services.routing.router import route_query
+from app.services.routing.rag_quality import (
+    filter_relevant_chunks,
+    has_strong_rag_context,
+    build_no_context_fallback,
+)
+from app.services.routing.observability import log_routing_decision
+from app.services.routing.preprocessor import build_routing_context
 from app.services.slot_extractor import extract_slots
 from app.storage.repository import save_chat_request, save_knowledge_gap, get_current_index_versions
 from app.utils.ids import gen_request_id
@@ -112,49 +119,64 @@ class AnswerService:
 
         self.memory.append_message(sid, role='user', content=query, request_id=request_id, metadata_json={'resolved_query': resolved_query})
 
-        # Avoid hallucinated carry-over from previous topic for ambiguous short noise-like inputs.
-        article = extract_article_candidate(resolved_query)
-        q_tokens = [t for t in re.split(r'\s+', query.strip()) if t]
-        is_ambiguous_short = (
-            len(q_tokens) <= 2
-            and not article
-            and not slots.item_type
-            and not slots.brand
-            and not slots.asks_documents
-            and not re.search(r'\d', query)
+        routing_ctx = build_routing_context(query, state, recent)
+        route = await route_query(
+            resolved_query,
+            conversation_state=state,
+            recent_messages=recent,
+            original_query=query,
         )
-        if is_ambiguous_short:
+        intent = route.intent
+        tools = route.tools_to_call
+        router = route.to_legacy_dict()
+        tools_called: list[str] = []
+        empty_results: list[str] = []
+        fallback_used = False
+
+        if route.needs_clarification or 'clarify' in tools:
             answer = 'Не совсем понял запрос. Уточните, пожалуйста, товар, артикул или параметр (например: "артикулы гильз ONDO" или "паспорт на ONDO...").'
+            log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['clarify'], latency_ms=now_ms() - started)
             payload = {
                 'session_id': sid, 'request_id': request_id, 'answer': answer,
                 'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
                 'answer_mode': 'clarify', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'low', 'tools_used': ['clarify'],
+                'route': router,
             }
-            self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'clarify', 'answer_mode': 'clarify'})
+            self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'ambiguous_question', 'answer_mode': 'clarify'})
             return payload
 
-        router = await route_query(resolved_query)
-        intent = router.get('intent', 'product_question')
-        tools = router.get('tools', ['rag_search'])
-
-        if intent == 'offtopic':
+        if intent in {'out_of_scope', 'offtopic', 'smalltalk'} or 'refuse' in tools:
             answer = 'Я консультирую только по сантехническим товарам и связанной документации.'
+            log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['refuse'], latency_ms=now_ms() - started)
             payload = {
                 'session_id': sid, 'request_id': request_id, 'answer': answer,
                 'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
                 'answer_mode': 'not_enough_data', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'high', 'tools_used': ['refuse'],
+                'route': router,
             }
             self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent})
             return payload
 
-        article = extract_article_candidate(resolved_query)
-        sku_result = self.sku.lookup(article) if article else None
-        kit_from_global = self.kits.lookup(article) if article else None
+        article = routing_ctx.article or extract_article_candidate(resolved_query)
+        sku_result = None
+        kit_from_global = None
+        if route.uses_tool('sku_lookup') and article:
+            tools_called.append('sku_lookup')
+            sku_result = self.sku.lookup(article)
+            kit_from_global = self.kits.lookup(article)
+            if not sku_result and not kit_from_global:
+                empty_results.append('sku_lookup')
 
-        rag_results = self.rag.search(expanded_query)
+        rag_results: list = []
         chroma_unavailable = not self.rag.available
+        if route.uses_tool('rag_search'):
+            tools_called.append('rag_search')
+            rag_results = self.rag.search(expanded_query)
+            if not rag_results:
+                empty_results.append('rag_search')
+        rag_results_strong = filter_relevant_chunks(rag_results)
 
         doc_type = None
         ql = resolved_query.lower()
@@ -168,8 +190,11 @@ class AnswerService:
             doc_type = slots.requested_doc_type
 
         doc_results = []
-        if 'document_search' in tools or intent in {'warranty_question', 'document_request'}:
+        if route.uses_tool('document_search'):
+            tools_called.append('document_search')
             doc_results = self.docs.search(expanded_query, article=article, doc_type=doc_type)
+            if not doc_results:
+                empty_results.append('document_search')
 
         # comparison flow
         comparison_block = None
@@ -192,22 +217,39 @@ class AnswerService:
 
         web_results = []
         used_web_search = False
-        if settings.ENABLE_WEB_SEARCH and ('san_team_search' in tools or (not rag_results and not doc_results and not sku_result)):
+        local_miss = not sku_result and not doc_results and not has_strong_rag_context(rag_results)
+        should_web_search = (
+            settings.ENABLE_WEB_SEARCH
+            and route.uses_tool('san_team_search')
+            and (intent == 'web_search_needed' or (local_miss and route.fallback_allowed))
+        )
+        if should_web_search:
+            tools_called.append('san_team_search')
             web_results = await self.web.search(resolved_query)
             used_web_search = bool(web_results)
+            if not web_results:
+                empty_results.append('san_team_search')
 
-        conf = compute_confidence(bool(sku_result or kit_from_global), [r.score for r in rag_results], bool(doc_results), used_web_only=used_web_search and not rag_results)
+        conf = compute_confidence(
+            bool(sku_result or kit_from_global),
+            [r.score for r in rag_results_strong or rag_results],
+            bool(doc_results),
+            used_web_only=used_web_search and not rag_results_strong,
+        )
 
         answer_mode = 'short_answer'
-        if intent in {'installation_question', 'warranty_question', 'compatibility_question'}:
+        if intent in {'installation_or_usage_question', 'installation_question', 'warranty_question'}:
             answer_mode = 'technical_answer'
         if intent == 'document_request':
             answer_mode = 'document_answer'
         if intent == 'comparison_question' or 'сравн' in ql:
             answer_mode = 'comparison_answer'
-        if 'подоб' in ql or 'выбрать' in ql:
+        if intent in {'product_question', 'price_or_availability_question'} or 'подоб' in ql or 'выбрать' in ql:
             answer_mode = 'selection_answer'
+        if intent == 'knowledge_base_question':
+            answer_mode = 'technical_answer'
 
+        display_rag = rag_results_strong or rag_results
         sources = [{
             'doc_id': r.metadata.get('doc_id', ''),
             'product': r.metadata.get('product', ''),
@@ -216,7 +258,7 @@ class AnswerService:
             'section': r.metadata.get('section', ''),
             'source_file': r.metadata.get('source_file', ''),
             'score': r.score,
-        } for r in rag_results[:5]]
+        } for r in display_rag[:5]]
         documents = [{'title': d['title'], 'type': d['type'], 'product': d['product'], 'brand': d['brand'], 'public_url': d['public_url']} for d in doc_results]
 
         # LLM fallback-safe answer
@@ -315,31 +357,51 @@ class AnswerService:
                 f"- Чем отличаются: {'; '.join(comparison_block['differences'])}\n"
                 f"- Для каких случаев: {'; '.join(comparison_block['use_cases'])}"
             )
+        if not answer and intent == 'document_request' and documents:
+            answer = 'Найдены документы:\n' + '\n'.join(
+                f"- {d['title']} ({d['type']}): {d['public_url']}" for d in documents[:5]
+            )
+
+        has_evidence = bool(sku_result or kit_from_global or documents or has_strong_rag_context(rag_results) or web_results)
+        if not answer and not has_evidence and route.fallback_allowed:
+            answer = build_no_context_fallback(intent)
+            fallback_used = True
+            tools_called.append('fallback')
+
+        rag_only_intents = {'knowledge_base_question', 'installation_or_usage_question', 'warranty_question'}
         try:
             if not answer:
-                prompt = build_user_prompt({
-                    'original_query': query,
-                    'resolved_query': resolved_query,
-                    'conversation_state': state,
-                    'recent_messages': recent[-10:] if resolved.get('depends_on_history') else [],
-                    'router_decision': router,
-                    'sku_result': sku_result.model_dump() if sku_result else None,
-                    'product_cards': [],
-                    'rag_chunks': [self._sanitize_context(r.text) for r in rag_results[:5]],
-                    'document_results': documents,
-                    'web_results': web_results,
-                    'confidence': conf,
-                    'answer_mode': answer_mode,
-                    'answer_style': answer_style,
-                })
-                answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
+                rag_for_prompt = rag_results_strong if rag_results_strong else []
+                if intent in rag_only_intents and not rag_for_prompt and not sku_result and not documents:
+                    answer = build_no_context_fallback(intent)
+                    fallback_used = True
+                    tools_called.append('fallback')
+                else:
+                    tools_called.append('llm')
+                    prompt = build_user_prompt({
+                        'original_query': query,
+                        'resolved_query': resolved_query,
+                        'conversation_state': state,
+                        'recent_messages': recent[-10:] if route.use_history or resolved.get('depends_on_history') else [],
+                        'router_decision': router,
+                        'sku_result': sku_result.model_dump() if sku_result else None,
+                        'product_cards': [],
+                        'rag_chunks': [self._sanitize_context(r.text) for r in rag_for_prompt[:5]],
+                        'document_results': documents,
+                        'web_results': web_results,
+                        'confidence': conf,
+                        'answer_mode': answer_mode,
+                        'answer_style': answer_style,
+                    })
+                    answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
         except Exception:
+            fallback_used = True
             if sku_result:
                 answer = f"Артикул {sku_result.article}: {sku_result.product}, бренд {sku_result.brand}, категория {sku_result.category}."
             elif documents:
                 answer = 'LLM временно недоступна. Найдены документы: ' + '; '.join([d['title'] for d in documents])
             else:
-                answer = 'LLM временно недоступна. Попробуйте повторить запрос позже.'
+                answer = build_no_context_fallback(intent)
 
         if answer_style == 'short' and answer:
             parts = re.split(r'(?<=[.!?])\s+', answer.strip())
@@ -347,8 +409,18 @@ class AnswerService:
 
         if chroma_unavailable:
             answer += '\n\nСемантический поиск временно недоступен, использованы точные индексы.'
-        if used_web_search and 'san.team' not in answer:
+        if used_web_search and web_results and 'san.team' not in answer:
             answer += '\n\nЧасть информации найдена через поиск по сайту san.team.'
+
+        log_routing_decision(
+            routing_ctx,
+            route,
+            request_id=request_id,
+            tools_called=tools_called,
+            empty_results=empty_results,
+            fallback_used=fallback_used,
+            latency_ms=now_ms() - started,
+        )
 
         if conf['label'] == 'low' or (not sources and not documents and not sku_result and not kit_from_global):
             save_knowledge_gap(
@@ -375,7 +447,8 @@ class AnswerService:
             'used_web_search': used_web_search,
             'web_results': web_results,
             'confidence': conf['label'],
-            'tools_used': tools,
+            'tools_used': tools_called or tools,
+            'route': router,
         }
 
         save_chat_request(
@@ -386,7 +459,7 @@ class AnswerService:
             intent=intent,
             answer_mode=answer_mode,
             router_mode=settings.ROUTER_MODE,
-            tools_used_json=tools,
+            tools_used_json=tools_called or tools,
             sources_json=sources,
             documents_json=documents,
             used_web_search=used_web_search,
