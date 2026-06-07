@@ -127,10 +127,11 @@ def test_weak_rag_allows_llm_for_kb(service, monkeypatch):
     service.rag.search = lambda q: [weak_chunk]
 
     async def _llm(system, user, **k):
-        return 'Гильза аксиальная 16 имеет длину 24 мм по данным каталога.'
+        raise AssertionError('deterministic sleeve length answer should not call LLM')
 
     service.llm.chat = _llm
     resp = asyncio.run(service.answer('гильза аксиальная 16, какая длина?'))
     assert resp['answer_mode'] == 'technical_answer'
-    assert 'llm' in resp['tools_used']
+    assert 'llm' not in resp['tools_used']
+    assert '24 мм' in resp['answer']
     assert 'В каталоге не нашёл' not in resp['answer']

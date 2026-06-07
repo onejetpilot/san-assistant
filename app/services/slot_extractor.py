@@ -50,7 +50,7 @@ def extract_slots(query: str) -> QuerySlots:
             slots.item_type = v
             break
 
-    if 'длина' in ql or 'длиной' in ql:
+    if 'длина' in ql or 'длинн' in ql or 'длиной' in ql:
         slots.dimension_name = 'length'
     elif 'диаметр' in ql or 'размер' in ql:
         slots.dimension_name = 'dimension'
@@ -83,9 +83,9 @@ def extract_slots(query: str) -> QuerySlots:
         slots.intent_hint = 'dimension'
 
     if any(x in ql for x in [
-        'встанет', 'влезет', 'подойд', 'подходит', 'совместим', 'имеет ли значение', 'отличи',
+        'встанет', 'влезет', 'подойд', 'подходит', 'совместим', 'имеет ли значение', 'имеет значение', 'отличи',
         'плотно', 'сидеть', 'сядет', 'под трубу', 'под трубку', 'трубка',
-        'для какой трубы', 'стенк',
+        'для какой трубы', 'стенк', 'толщина стенки', 'под какую толщину', 'подойдут гильзы',
     ]):
         slots.asks_compatibility = True
         if slots.intent_hint == 'generic':
