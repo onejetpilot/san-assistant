@@ -28,6 +28,13 @@ def test_article_lookup_by_number():
     assert 'sku_lookup' in d.tools_to_call
 
 
+def test_dimension_question_with_article_uses_sku_lookup():
+    d = _route('Какая длина OXS00016?')
+    assert d.intent == 'knowledge_base_question'
+    assert 'sku_lookup' in d.tools_to_call
+    assert 'rag_search' in d.tools_to_call
+
+
 def test_price_question():
     d = _route('Сколько стоит фильтр грубой очистки?')
     assert d.intent == 'price_or_availability_question'

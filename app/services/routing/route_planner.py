@@ -95,6 +95,10 @@ def plan_route(ctx: RoutingContext, intent: str, confidence: float, reason: str)
     if intent == 'comparison_question' and not ctx.article:
         tools = [t for t in tools if t != 'sku_lookup']
 
+    if intent == 'knowledge_base_question' and ctx.article and ctx.slots.dimension_name:
+        if 'sku_lookup' not in tools:
+            tools.insert(0, 'sku_lookup')
+
     return RouteDecision(
         intent=intent,
         selected_route=spec['selected_route'],

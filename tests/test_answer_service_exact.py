@@ -1,5 +1,6 @@
 from app.indexes.kit_index import KitRecord
 from app.indexes.sku_index import SkuIndex, SkuRecord
+from app.rag.retriever import RetrievedChunk
 from app.services.answer_service import AnswerService
 from app.services.slot_extractor import extract_slots
 from app.utils.article_normalizer import normalize_article
@@ -56,6 +57,32 @@ def test_format_exact_kit_answer_with_component_descriptions():
     assert '10 шт OXS00016' in answer
     assert 'OXF01612 — диаметр(мм х дюйм) 16х1/2' in answer
     assert 'OXS00016 — внутренний диаметр(мм) 16' in answer
+
+
+def test_format_dimension_answer_from_sku():
+    answer = AnswerService._format_dimension_answer(
+        _sku('OXS00016', 'внутренний диаметр(мм) 16, длина(мм) 24, наружный диаметр(мм) 21,5'),
+        'length',
+    )
+
+    assert 'OXS00016' in answer
+    assert 'длина: 24 мм' in answer
+    assert 'наружный диаметр' in answer
+
+
+def test_format_pipe_compatibility_answer_rejects_unlisted_wall_thickness():
+    chunk = RetrievedChunk(
+        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
+        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
+        score=0.5,
+    )
+
+    answer = AnswerService._format_pipe_compatibility_answer('гильза встанет в трубу 16x2,0?', [chunk])
+
+    assert '16 мм' in answer
+    assert '2,2 мм' in answer
+    assert '16x2,0' in answer
+    assert 'подтверждения в базе нет' in answer
 
 
 def test_russian_composition_markers():

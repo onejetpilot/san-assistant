@@ -89,6 +89,57 @@ class AnswerService:
         return "\n".join(lines)
 
     @staticmethod
+    def _extract_dimension_value(short_description: str, dimension_name: str) -> str:
+        if not short_description:
+            return ''
+        if dimension_name == 'length':
+            m = re.search(r'длина\s*\(мм\)\s*([0-9]+(?:[,.][0-9]+)?)', short_description, flags=re.IGNORECASE)
+            if m:
+                return f"{m.group(1)} мм"
+        if dimension_name == 'dimension':
+            m = re.search(r'(?:диаметр|размер|наружный диаметр|внутренний диаметр)\s*\([^)]*\)\s*([0-9хx/,.]+)', short_description, flags=re.IGNORECASE)
+            if m:
+                return m.group(1)
+        return ''
+
+    @classmethod
+    def _format_dimension_answer(cls, sku: SkuRecord, dimension_name: str) -> str:
+        value = cls._extract_dimension_value(sku.short_description, dimension_name)
+        if dimension_name == 'length' and value:
+            return f"У артикула {sku.article} длина: {value}. Характеристики: {sku.short_description}."
+        if value:
+            return f"У артикула {sku.article} размер/диаметр: {value}. Характеристики: {sku.short_description}."
+        return cls._format_sku_answer(sku)
+
+    @staticmethod
+    def _format_pipe_compatibility_answer(query: str, rag_results: list) -> str:
+        q = query.lower()
+        if not any(x in q for x in ['встанет', 'влезет', 'подойд', 'подходит', 'совместим']):
+            return ''
+
+        context = '\n'.join(str(r.text) for r in rag_results[:5])
+        if not context:
+            return ''
+
+        supports_16_22 = re.search(r'16\s*мм[^\n.]+2[,.]2\s*мм', context, flags=re.IGNORECASE)
+        supports_20_28 = re.search(r'20\s*мм[^\n.]+2[,.]8\s*мм', context, flags=re.IGNORECASE)
+        asks_16_20 = re.search(r'16\s*[xх/]\s*2[,.]0', q)
+        asks_16_22 = re.search(r'16\s*[xх/]\s*2[,.]2', q)
+        asks_20_28 = re.search(r'20\s*[xх/]\s*2[,.]8', q)
+
+        if asks_16_20 and supports_16_22:
+            return (
+                "По базе знаний для аксиальных фитингов ONDO указана совместимость с трубой "
+                "наружным диаметром 16 мм и толщиной стенки 2,2 мм. Для трубы 16x2,0 "
+                "подтверждения в базе нет, поэтому я бы не подтверждал совместимость без документа производителя."
+            )
+        if asks_16_22 and supports_16_22:
+            return "Да, в базе знаний указана совместимость с трубой 16x2,2 мм для аксиальных фитингов ONDO."
+        if asks_20_28 and supports_20_28:
+            return "Да, в базе знаний указана совместимость с трубой 20x2,8 мм для аксиальных фитингов ONDO."
+        return ''
+
+    @staticmethod
     def _matches_item_type(target_type: str, article_type: str) -> bool:
         target = str(target_type or '').strip().lower()
         article = str(article_type or '').strip().lower()
@@ -298,6 +349,8 @@ class AnswerService:
                 component_articles=component_articles,
             )
             answer = self._format_kit_answer(kit, sku_result)
+        elif sku_result and asks_dimension:
+            answer = self._format_dimension_answer(sku_result, slots.dimension_name)
         elif sku_result and intent == 'article_lookup':
             answer = self._format_sku_answer(sku_result)
 
@@ -327,10 +380,15 @@ class AnswerService:
                     seen.add(art)
                     unique.append((art, short))
                 top = unique[:3]
-                lines = [f"Найдено по запросу ({target_type}):"]
-                for art, short in top:
-                    lines.append(f"- {art}: {short}")
-                answer = '\n'.join(lines)
+                if len(top) == 1:
+                    row = self.sku.lookup(top[0][0])
+                    if row:
+                        answer = self._format_dimension_answer(row, slots.dimension_name)
+                if not answer:
+                    lines = [f"Найдено по запросу ({target_type}):"]
+                    for art, short in top:
+                        lines.append(f"- {art}: {short}")
+                    answer = '\n'.join(lines)
 
         # Deterministic article list by item_type (and optional brand).
         if not answer and slots.asks_articles_list and target_type:
@@ -360,6 +418,8 @@ class AnswerService:
                 f"- Чем отличаются: {'; '.join(comparison_block['differences'])}\n"
                 f"- Для каких случаев: {'; '.join(comparison_block['use_cases'])}"
             )
+        if not answer and slots.asks_compatibility:
+            answer = self._format_pipe_compatibility_answer(resolved_query, rag_results)
         if not answer and intent == 'document_request' and documents:
             answer = 'Найдены документы:\n' + '\n'.join(
                 f"- {d['title']} ({d['type']}): {d['public_url']}" for d in documents[:5]
