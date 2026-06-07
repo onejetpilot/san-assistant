@@ -116,7 +116,10 @@ class AnswerService:
     @staticmethod
     def _format_pipe_compatibility_answer(query: str, rag_results: list) -> str:
         q = query.lower()
-        if not any(x in q for x in ['встанет', 'влезет', 'подойд', 'подходит', 'совместим']):
+        if not any(x in q for x in [
+            'встанет', 'влезет', 'подойд', 'подходит', 'совместим',
+            'плотно', 'сидеть', 'сядет', 'под трубу', 'под трубку', 'трубка',
+        ]):
             return ''
 
         context = '\n'.join(str(r.text) for r in rag_results[:5])
@@ -127,7 +130,25 @@ class AnswerService:
         supports_20_28 = re.search(r'20\s*мм[^\n.]+2[,.]8\s*мм', context, flags=re.IGNORECASE)
         asks_16_20 = re.search(r'16\s*[xх/]\s*2[,.]0', q)
         asks_16_22 = re.search(r'16\s*[xх/]\s*2[,.]2', q)
+        asks_16_26 = re.search(r'16\s*[xх/]\s*2[,.]6', q)
         asks_20_28 = re.search(r'20\s*[xх/]\s*2[,.]8', q)
+        asks_inner_157 = 'внутрен' in q and re.search(r'15[,.]7', q)
+        asks_inner_diameter = 'внутрен' in q and 'диаметр' in q
+
+        if asks_inner_157 and supports_16_22:
+            return (
+                "По базе знаний аксиальные фитинги ONDO рассчитаны на полимерную трубу "
+                "с наружным диаметром 16 мм и толщиной стенки 2,2 мм. По внутреннему диаметру "
+                "трубки 15,7 мм совместимость подтвердить нельзя: для аксиального соединения важны "
+                "наружный диаметр и толщина стенки трубы. Для дренажной трубки кондиционера с внутренним "
+                "диаметром 15,7 мм в базе нет подтверждения, что она будет плотно сидеть на таком тройнике."
+            )
+        if asks_inner_diameter and supports_16_22:
+            return (
+                "В базе знаний совместимость для аксиальных фитингов ONDO указана не по внутреннему диаметру, "
+                "а по наружному диаметру и толщине стенки трубы: для размера 16 — труба 16x2,2 мм. "
+                "Подбор по внутреннему диаметру в базе не подтвержден."
+            )
 
         if asks_16_20 and supports_16_22:
             return (
@@ -135,8 +156,15 @@ class AnswerService:
                 "наружным диаметром 16 мм и толщиной стенки 2,2 мм. Для трубы 16x2,0 "
                 "подтверждения в базе нет, поэтому я бы не подтверждал совместимость без документа производителя."
             )
+        if asks_16_22 and asks_16_26 and supports_16_22:
+            return (
+                "Из этих вариантов по базе знаний подтверждена труба 16x2,2 мм. "
+                "Для трубы 16x2,6 мм подтверждения в базе нет."
+            )
         if asks_16_22 and supports_16_22:
             return "Да, в базе знаний указана совместимость с трубой 16x2,2 мм для аксиальных фитингов ONDO."
+        if asks_16_26 and supports_16_22:
+            return "Для трубы 16x2,6 мм подтверждения в базе нет. В базе указана труба 16x2,2 мм."
         if asks_20_28 and supports_20_28:
             return "Да, в базе знаний указана совместимость с трубой 20x2,8 мм для аксиальных фитингов ONDO."
         return ''
@@ -364,6 +392,9 @@ class AnswerService:
         elif sku_result and intent == 'article_lookup':
             answer = self._format_sku_answer(sku_result)
 
+        if not answer and slots.asks_compatibility:
+            answer = self._format_pipe_compatibility_answer(resolved_query, rag_results)
+
         # Deterministic size answer by article type + dimension, to avoid mixing types (e.g. гильза vs муфта).
         if not answer and asks_dimension and target_type:
             diameter = slots.dimension_value
@@ -428,8 +459,6 @@ class AnswerService:
                 f"- Чем отличаются: {'; '.join(comparison_block['differences'])}\n"
                 f"- Для каких случаев: {'; '.join(comparison_block['use_cases'])}"
             )
-        if not answer and slots.asks_compatibility:
-            answer = self._format_pipe_compatibility_answer(resolved_query, rag_results)
         if not answer and intent == 'document_request' and documents:
             answer = 'Найдены документы:\n' + '\n'.join(
                 f"- {d['title']} ({d['type']}): {d['public_url']}" for d in documents[:5]

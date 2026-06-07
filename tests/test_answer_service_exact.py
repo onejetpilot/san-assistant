@@ -85,6 +85,57 @@ def test_format_pipe_compatibility_answer_rejects_unlisted_wall_thickness():
     assert 'подтверждения в базе нет' in answer
 
 
+def test_format_pipe_compatibility_answer_rejects_inner_diameter_question():
+    chunk = RetrievedChunk(
+        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
+        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
+        score=0.5,
+    )
+
+    answer = AnswerService._format_pipe_compatibility_answer(
+        'тройник аксиальный 16x16x16, трубка кондиционера с внутренним диаметром 15,7мм будет плотно сидеть?',
+        [chunk],
+    )
+
+    assert 'наружным диаметром 16 мм' in answer
+    assert '2,2 мм' in answer
+    assert '15,7 мм' in answer
+    assert 'совместимость подтвердить нельзя' in answer
+
+
+def test_format_pipe_compatibility_answer_prefers_16x22_over_16x26():
+    chunk = RetrievedChunk(
+        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
+        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
+        score=0.5,
+    )
+
+    answer = AnswerService._format_pipe_compatibility_answer(
+        'тройник под трубу 16x2.2 или 16x2.6?',
+        [chunk],
+    )
+
+    assert 'подтверждена труба 16x2,2 мм' in answer
+    assert '16x2,6 мм' in answer
+    assert 'подтверждения в базе нет' in answer
+
+
+def test_format_pipe_compatibility_answer_explains_inner_diameter_is_not_spec():
+    chunk = RetrievedChunk(
+        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
+        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
+        score=0.5,
+    )
+
+    answer = AnswerService._format_pipe_compatibility_answer(
+        'к нему труба с каким внутренним диаметром подойдет?',
+        [chunk],
+    )
+
+    assert 'не по внутреннему диаметру' in answer
+    assert '16x2,2 мм' in answer
+
+
 def test_russian_composition_markers():
     assert extract_slots('Что входит в набор OXF01612K10G?').asks_composition
     assert extract_slots('Какая комплектация OXF01612K10G?').asks_composition
