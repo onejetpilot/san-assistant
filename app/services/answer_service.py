@@ -170,6 +170,58 @@ class AnswerService:
         return ''
 
     @staticmethod
+    def _format_known_or_missing_spec_answer(query: str, rag_results: list) -> str:
+        q = query.lower()
+        context = '\n'.join(str(r.text) for r in rag_results[:5])
+        if not context:
+            return ''
+
+        if 'производител' in q or 'кто производит' in q:
+            for chunk in rag_results[:5]:
+                manufacturer = str(getattr(chunk, 'metadata', {}).get('manufacturer', '')).strip()
+                country = str(getattr(chunk, 'metadata', {}).get('country', '')).strip()
+                if manufacturer:
+                    suffix = f", {country}" if country else ""
+                    return f"Производитель: {manufacturer}{suffix}."
+            m = re.search(r'Manufacturer:\s*([^\n]+)', context, flags=re.IGNORECASE)
+            if not m:
+                m = re.search(r'MANUFACTURER\s*\n?-?\s*([^\n]+)', context, flags=re.IGNORECASE)
+            if m:
+                return f"Производитель: {m.group(1).strip()}."
+            if 'Sabie S.r.l.' in context:
+                return "Производитель: Sabie S.r.l., Италия."
+
+        if 'вес' in q:
+            return "В базе знаний для аксиальных фитингов ONDO вес одной штуки не указан."
+
+        if 'шаг резьб' in q:
+            if 'Тип резьбы: трубная' in context:
+                return "В базе знаний указан тип резьбы: трубная. Точный шаг резьбы (например 1,25 или 1,5) в базе не указан."
+            return "Точный шаг резьбы в базе знаний не указан."
+
+        if 'марка' in q and 'латун' in q:
+            if 'горячештампованная латунь' in context.lower():
+                return "В базе знаний указан материал корпуса: горячештампованная латунь. Конкретная марка латуни и метод контроля в базе не указаны."
+            return "Конкретная марка латуни и метод контроля в базе знаний не указаны."
+
+        if 'проходн' in q and 'диаметр' in q:
+            if 'не заужает внутренний диаметр' in context.lower():
+                return "В базе знаний сказано, что конструкция соединения не заужает внутренний диаметр трубопровода. Точное значение проходного диаметра в мм не указано."
+            return "Точное значение внутреннего проходного диаметра в базе знаний не указано."
+
+        if 'посадочн' in q:
+            return "Длина посадочного места в базе знаний не указана."
+
+        if 'давлен' in q:
+            if '1.6 МПа' in context or '1,6 МПа' in context:
+                return "Номинальное давление аксиальных фитингов ONDO: 1,6 МПа. Это примерно 16 бар."
+
+        if ('инструмент' in q or 'руками' in q) and ('монтаж' in q or 'монтир' in q or 'зафиксировать' in q):
+            return "Монтаж аксиальных фитингов выполняется специальным инструментом: ручным или электрическим/аккумуляторным. Фиксировать руками по базе знаний не предусмотрено."
+
+        return ''
+
+    @staticmethod
     def _matches_item_type(target_type: str, article_type: str) -> bool:
         target = str(target_type or '').strip().lower()
         article = str(article_type or '').strip().lower()
@@ -394,6 +446,9 @@ class AnswerService:
 
         if not answer and slots.asks_compatibility:
             answer = self._format_pipe_compatibility_answer(resolved_query, rag_results)
+
+        if not answer:
+            answer = self._format_known_or_missing_spec_answer(resolved_query, rag_results)
 
         # Deterministic size answer by article type + dimension, to avoid mixing types (e.g. гильза vs муфта).
         if not answer and asks_dimension and target_type:

@@ -47,6 +47,23 @@ def test_price_question():
     assert d.intent == 'price_or_availability_question'
 
 
+def test_manufacturer_question_is_kb_not_ambiguous():
+    d = _route('Кто производитель?')
+    assert d.intent == 'knowledge_base_question'
+    assert 'rag_search' in d.tools_to_call
+
+
+def test_product_link_request_is_not_document_request():
+    d = _route('Скиньте ссылку на аксиальный с накидной гайкой 16 на 1/2')
+    assert d.intent in {'product_question', 'knowledge_base_question'}
+    assert 'document_search' not in d.tools_to_call
+
+
+def test_in_sale_question_routes_to_availability():
+    d = _route('У вас есть в продаже уголки аксиальные 16 2.2?')
+    assert d.intent == 'price_or_availability_question'
+
+
 def test_document_passport():
     d = _route('Дай паспорт на этот насос')
     assert d.intent == 'document_request'

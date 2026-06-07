@@ -136,6 +136,33 @@ def test_format_pipe_compatibility_answer_explains_inner_diameter_is_not_spec():
     assert '16x2,2 мм' in answer
 
 
+def test_format_known_or_missing_spec_answers_from_real_questions():
+    chunk = RetrievedChunk(
+        text=(
+            'TECHNICAL SPECIFICATIONS\n'
+            '- Номинальное давление: 1.6 МПа\n'
+            'MATERIALS\n'
+            '- Корпус фитингов: горячештампованная латунь\n'
+            'CONNECTIONS\n'
+            '- Тип резьбы: трубная\n'
+            'DESCRIPTION\n'
+            '- Конструкция соединения не заужает внутренний диаметр трубопровода.\n'
+            'FAQ\n'
+            'Работы по монтажу аксиальных фитингов должны выполняться с помощью комплекта специального инструмента: ручного; электрического.'
+        ),
+        metadata={'manufacturer': 'Sabie S.r.l.', 'country': 'Italy'},
+        score=0.6,
+    )
+
+    assert 'Sabie S.r.l.' in AnswerService._format_known_or_missing_spec_answer('Кто производитель?', [chunk])
+    assert 'вес одной штуки не указан' in AnswerService._format_known_or_missing_spec_answer('А какой вес у одной шт?', [chunk])
+    assert 'шаг резьбы' in AnswerService._format_known_or_missing_spec_answer('Какой шаг резьбы: 1,25 или 1,5?', [chunk])
+    assert 'горячештампованная латунь' in AnswerService._format_known_or_missing_spec_answer('Марка используемой латуни?', [chunk])
+    assert 'проходного диаметра' in AnswerService._format_known_or_missing_spec_answer('Какой внутренний проходной диаметр?', [chunk])
+    assert 'примерно 16 бар' in AnswerService._format_known_or_missing_spec_answer('Рабочее давление всего 1,6 Мпа?', [chunk])
+    assert 'специальным инструментом' in AnswerService._format_known_or_missing_spec_answer('Муфты монтировать каким инструментом или можно руками?', [chunk])
+
+
 def test_russian_composition_markers():
     assert extract_slots('Что входит в набор OXF01612K10G?').asks_composition
     assert extract_slots('Какая комплектация OXF01612K10G?').asks_composition
