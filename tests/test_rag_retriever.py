@@ -2,6 +2,8 @@ from app.core import embedding_client
 from app.core.config import settings
 from app.rag import retriever as retriever_module
 from app.rag.retriever import RagRetriever
+from app.rag.reranker import LexicalOverlapReranker
+from app.rag.retriever import RetrievedChunk
 
 
 class _Collection:
@@ -35,3 +37,14 @@ def test_rag_filters_low_score_chunks(monkeypatch):
 
     assert rag.available
     assert [item.metadata['doc_id'] for item in results] == ['strong']
+
+
+def test_lexical_reranker_prefers_query_terms():
+    chunks = [
+        RetrievedChunk(text='общий текст про фитинги', metadata={'doc_id': 'generic'}, score=0.5),
+        RetrievedChunk(text='паспорт насос ondo инструкция монтаж', metadata={'doc_id': 'specific'}, score=0.49),
+    ]
+
+    ranked = LexicalOverlapReranker().rerank('паспорт насос ondo', chunks)
+
+    assert ranked[0].metadata['doc_id'] == 'specific'

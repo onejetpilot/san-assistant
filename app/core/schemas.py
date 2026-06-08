@@ -36,6 +36,17 @@ class DocumentItem(BaseModel):
     public_url: str
 
 
+class RetrievalTraceItem(BaseModel):
+    status: str
+    query: str
+    count: int = 0
+    results: list[dict] = Field(default_factory=list)
+    note: str = ''
+    error: str = ''
+    meta: dict = Field(default_factory=dict)
+    mode: str | None = None
+
+
 class ChatResponse(BaseModel):
     session_id: str
     conversation_id: str
@@ -51,6 +62,8 @@ class ChatResponse(BaseModel):
     web_results: list[dict] = Field(default_factory=list)
     confidence: str = 'low'
     tools_used: list[str] = Field(default_factory=list)
+    retrieval_trace: list[RetrievalTraceItem] = Field(default_factory=list)
+    route: dict = Field(default_factory=dict)
 
 
 class FeedbackRequest(BaseModel):

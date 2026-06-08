@@ -127,12 +127,12 @@ class ConversationMemoryService:
         now = datetime.utcnow()
         if not row:
             row = ConversationState(
-                session_id=conversation_id,
+                session_id=session_id,
                 conversation_id=conversation_id,
                 updated_at=now,
             )
             db.add(row)
-        row.session_id = conversation_id
+        row.session_id = session_id
         for key, value in kwargs.items():
             if hasattr(row, key):
                 setattr(row, key, value)

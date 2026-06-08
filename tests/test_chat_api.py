@@ -34,6 +34,17 @@ def test_chat_endpoint_returns_service_payload(monkeypatch):
             'web_results': [],
             'confidence': 'high',
             'tools_used': ['smalltalk'],
+            'retrieval_trace': [{
+                'status': 'ok',
+                'query': message,
+                'count': 1,
+                'results': [{'x': 1}],
+                'note': '',
+                'error': '',
+                'meta': {'tool': 'smalltalk'},
+                'mode': 'test',
+            }],
+            'route': {'intent': 'smalltalk'},
         }
 
     monkeypatch.setattr(routes_chat.service, 'answer', _answer)
@@ -44,3 +55,16 @@ def test_chat_endpoint_returns_service_payload(monkeypatch):
     assert body['answer'] == 'echo:привет'
     assert body['session_id'] == 's1'
     assert body['conversation_id'] == 'c1'
+    assert body['retrieval_trace'][0]['meta']['tool'] == 'smalltalk'
+    assert body['route']['intent'] == 'smalltalk'
+
+
+def test_chat_endpoint_returns_safe_500(monkeypatch):
+    async def _answer(*args, **kwargs):
+        raise RuntimeError('boom')
+
+    monkeypatch.setattr(routes_chat.service, 'answer', _answer)
+
+    resp = client.post('/api/chat', json={'message': 'привет', 'session_id': None, 'answer_style': 'short'})
+    assert resp.status_code == 500
+    assert 'Не удалось обработать сообщение' in resp.json()['detail']

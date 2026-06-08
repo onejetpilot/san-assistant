@@ -23,11 +23,82 @@ _SCHEMA_UPGRADES = {
 _INDEX_UPGRADES = [
     'CREATE INDEX IF NOT EXISTS ix_chat_requests_conversation_id ON chat_requests (conversation_id)',
     'CREATE INDEX IF NOT EXISTS ix_chat_messages_conversation_id ON chat_messages (conversation_id)',
+    'CREATE INDEX IF NOT EXISTS ix_conversation_state_session_id ON conversation_state (session_id)',
     'CREATE UNIQUE INDEX IF NOT EXISTS ix_conversation_state_conversation_id ON conversation_state (conversation_id)',
 ]
 
 
+def _conversation_state_has_unique_session_id() -> bool:
+    if engine.dialect.name != 'sqlite':
+        return False
+    inspector = inspect(engine)
+    if 'conversation_state' not in set(inspector.get_table_names()):
+        return False
+    with engine.connect() as conn:
+        rows = conn.execute(text("PRAGMA index_list('conversation_state')")).mappings().all()
+        for row in rows:
+            if not row.get('unique'):
+                continue
+            index_name = row.get('name')
+            cols = conn.execute(text(f"PRAGMA index_info('{index_name}')")).mappings().all()
+            if [col.get('name') for col in cols] == ['session_id']:
+                return True
+    return False
+
+
+def _rebuild_conversation_state_without_session_unique() -> None:
+    if not _conversation_state_has_unique_session_id():
+        return
+    with engine.begin() as conn:
+        conn.execute(text('ALTER TABLE conversation_state RENAME TO conversation_state_old_unique_session'))
+        conn.execute(text(
+            '''
+            CREATE TABLE conversation_state (
+                id INTEGER NOT NULL PRIMARY KEY,
+                session_id VARCHAR(64) NOT NULL,
+                conversation_id VARCHAR(64),
+                current_product TEXT,
+                current_brand VARCHAR(128),
+                current_article VARCHAR(128),
+                current_category VARCHAR(256),
+                current_doc_id VARCHAR(256),
+                last_intent VARCHAR(64),
+                last_answer_mode VARCHAR(64),
+                last_sources_json JSON,
+                last_documents_json JSON,
+                updated_at DATETIME NOT NULL
+            )
+            '''
+        ))
+        conn.execute(text(
+            '''
+            INSERT INTO conversation_state (
+                id, session_id, conversation_id, current_product, current_brand, current_article,
+                current_category, current_doc_id, last_intent, last_answer_mode,
+                last_sources_json, last_documents_json, updated_at
+            )
+            SELECT
+                id,
+                COALESCE(conversation_id, session_id) AS session_id,
+                conversation_id,
+                current_product,
+                current_brand,
+                current_article,
+                current_category,
+                current_doc_id,
+                last_intent,
+                last_answer_mode,
+                last_sources_json,
+                last_documents_json,
+                updated_at
+            FROM conversation_state_old_unique_session
+            '''
+        ))
+        conn.execute(text('DROP TABLE conversation_state_old_unique_session'))
+
+
 def _ensure_schema_upgrades() -> None:
+    _rebuild_conversation_state_without_session_unique()
     inspector = inspect(engine)
     table_names = set(inspector.get_table_names())
     with engine.begin() as conn:

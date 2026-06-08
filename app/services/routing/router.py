@@ -6,8 +6,10 @@ from app.core.config import settings
 from app.core.llm_client import OpenAICompatibleLLMClient
 from app.services.routing.intent_classifier import classify_intent
 from app.services.routing.models import RouteDecision, RoutingContext
-from app.services.routing.preprocessor import build_routing_context
+from app.services.routing.preprocessor import build_routing_context, normalize_query
 from app.services.routing.route_planner import plan_route
+from app.services.slot_extractor import extract_slots
+from app.utils.text import extract_article_candidate
 
 
 class QueryRouter:
@@ -85,11 +87,11 @@ async def route_query(
         ctx = RoutingContext(
             original_query=original_query,
             resolved_query=query,
-            normalized_query=ctx.normalized_query,
+            normalized_query=normalize_query(query),
             depends_on_history=ctx.depends_on_history,
             has_conversation_context=ctx.has_conversation_context,
-            article=ctx.article,
-            slots=ctx.slots,
+            article=extract_article_candidate(query),
+            slots=extract_slots(query),
         )
     return await _default_router.route(ctx)
 

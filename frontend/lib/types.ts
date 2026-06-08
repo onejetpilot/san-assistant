@@ -64,6 +64,17 @@ export type ChatResponse = {
   web_results: WebResultItem[];
   confidence: 'high' | 'medium' | 'low';
   tools_used: string[];
+  retrieval_trace?: Array<{
+    status: string;
+    query: string;
+    count: number;
+    results: Record<string, unknown>[];
+    note?: string;
+    error?: string;
+    meta?: Record<string, unknown>;
+    mode?: string;
+  }>;
+  route?: Record<string, unknown>;
 };
 
 export type FeedbackRequest = {

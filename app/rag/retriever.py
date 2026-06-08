@@ -2,6 +2,7 @@ from pydantic import BaseModel
 from app.core.config import settings
 from app.core.chroma import get_chroma_client
 from app.core.embedding_client import EmbeddingClient, EmbeddingNotConfiguredError
+from app.rag.reranker import LexicalOverlapReranker, NoOpReranker
 
 
 class RetrievedChunk(BaseModel):
@@ -43,4 +44,5 @@ class RagRetriever:
             score = 1.0 - float(dist or 1.0)
             if score >= settings.RAG_MIN_SCORE:
                 out.append(RetrievedChunk(text=d, metadata=m or {}, score=score))
-        return out
+        reranker = LexicalOverlapReranker() if settings.ENABLE_RERANKER else NoOpReranker()
+        return reranker.rerank(query, out)[:settings.RERANK_TOP_K if settings.ENABLE_RERANKER else len(out)]

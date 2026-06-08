@@ -1,7 +1,10 @@
 from uuid import uuid4
 
 from app.storage.db import init_db
+from app.storage.db import SessionLocal
+from app.storage.models import ConversationState
 from app.services.conversation_memory import ConversationMemoryService
+from sqlalchemy import select
 
 
 def test_conversation_memory_isolated_by_conversation_id():
@@ -23,3 +26,9 @@ def test_conversation_memory_isolated_by_conversation_id():
     assert [m['content'] for m in messages_b] == ['сообщение B']
     assert memory.get_state(conv_a, session_id=session_id)['current_article'] == 'ART-A'
     assert memory.get_state(conv_b, session_id=session_id)['current_article'] == 'ART-B'
+
+    db = SessionLocal()
+    row = db.execute(select(ConversationState).where(ConversationState.conversation_id == conv_a)).scalars().first()
+    db.close()
+    assert row is not None
+    assert row.session_id == session_id
