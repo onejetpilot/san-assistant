@@ -37,12 +37,14 @@ export type WebResultItem = {
 
 export type ChatRequest = {
   session_id: string | null;
+  conversation_id: string | null;
   message: string;
   answer_style: AnswerStyle;
 };
 
 export type ChatResponse = {
   session_id: string;
+  conversation_id: string;
   request_id: string;
   answer: string;
   original_query: string;
@@ -54,7 +56,8 @@ export type ChatResponse = {
     | 'document_answer'
     | 'comparison_answer'
     | 'selection_answer'
-    | 'not_enough_data';
+    | 'not_enough_data'
+    | 'clarify';
   sources: SourceItem[];
   documents: DocumentItem[];
   used_web_search: boolean;

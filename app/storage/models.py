@@ -22,6 +22,7 @@ class ChatRequestModel(Base):
     model_name: Mapped[str] = mapped_column(String(128))
     latency_ms: Mapped[int] = mapped_column(Integer, default=0)
     session_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     rag_index_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     documents_index_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     needs_human_review: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -82,10 +83,22 @@ class ChatSession(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class Conversation(Base):
+    __tablename__ = 'conversations'
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    conversation_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    session_id: Mapped[str] = mapped_column(String(64), index=True)
+    title: Mapped[str | None] = mapped_column(String(256), nullable=True)
+    summary: Mapped[str] = mapped_column(Text, default='')
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class ChatMessage(Base):
     __tablename__ = 'chat_messages'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[str] = mapped_column(String(64), index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
@@ -97,6 +110,7 @@ class ConversationState(Base):
     __tablename__ = 'conversation_state'
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     session_id: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    conversation_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
     current_product: Mapped[str | None] = mapped_column(Text, nullable=True)
     current_brand: Mapped[str | None] = mapped_column(String(128), nullable=True)
     current_article: Mapped[str | None] = mapped_column(String(128), nullable=True)

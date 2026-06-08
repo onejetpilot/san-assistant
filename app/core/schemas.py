@@ -5,6 +5,7 @@ from app.core.config import settings
 
 class ChatRequest(BaseModel):
     session_id: str | None = None
+    conversation_id: str | None = None
     message: str = Field(min_length=1, max_length=settings.CHAT_MAX_MESSAGE_CHARS)
     answer_style: str = 'detailed'
 
@@ -37,6 +38,7 @@ class DocumentItem(BaseModel):
 
 class ChatResponse(BaseModel):
     session_id: str
+    conversation_id: str
     request_id: str
     answer: str
     original_query: str

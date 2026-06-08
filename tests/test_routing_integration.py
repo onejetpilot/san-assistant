@@ -40,8 +40,9 @@ def service(monkeypatch):
     svc.web = type('W', (), {'search': lambda self, q: []})()
     svc.memory = type('M', (), {
         'ensure_session': lambda self, sid: sid or 'test-session',
-        'get_state': lambda self, sid: {},
-        'get_recent_messages': lambda self, sid, limit=10: [],
+        'ensure_conversation': lambda self, sid, cid=None: cid or sid,
+        'get_state': lambda self, *a, **k: {},
+        'get_recent_messages': lambda self, *a, **k: [],
         'append_message': lambda self, *a, **k: None,
         'update_state': lambda self, *a, **k: None,
     })()

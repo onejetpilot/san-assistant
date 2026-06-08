@@ -18,9 +18,10 @@ def test_chat_endpoint_rejects_too_long_message():
 
 
 def test_chat_endpoint_returns_service_payload(monkeypatch):
-    async def _answer(message, session_id, answer_style):
+    async def _answer(message, session_id=None, answer_style='detailed', conversation_id=None):
         return {
             'session_id': 's1',
+            'conversation_id': conversation_id or 'c1',
             'request_id': 'r1',
             'answer': f'echo:{message}',
             'original_query': message,
@@ -42,3 +43,4 @@ def test_chat_endpoint_returns_service_payload(monkeypatch):
     body = resp.json()
     assert body['answer'] == 'echo:привет'
     assert body['session_id'] == 's1'
+    assert body['conversation_id'] == 'c1'

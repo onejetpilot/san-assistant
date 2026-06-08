@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { chat, clearAccessToken, ApiError } from '../../lib/api';
-import { clearSessionId, getSessionId, setSessionId } from '../../lib/storage';
+import { clearConversationId, getConversationId, getSessionId, setConversationId, setSessionId } from '../../lib/storage';
 import type { AnswerStyle, Message } from '../../lib/types';
 import TokenGate from '../auth/TokenGate';
 import ChatInput from './ChatInput';
@@ -14,11 +14,19 @@ function shortSession(value: string | null): string {
   return value.slice(0, 8);
 }
 
+function createConversationId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) {
+    return crypto.randomUUID();
+  }
+  return `conv_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+}
+
 export default function ChatLayout() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [sessionId, setLocalSessionId] = useState<string | null>(null);
+  const [conversationId, setLocalConversationId] = useState<string | null>(null);
   const [answerStyle, setAnswerStyle] = useState<AnswerStyle>('detailed');
   const [needsToken, setNeedsToken] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -27,6 +35,7 @@ export default function ChatLayout() {
 
   useEffect(() => {
     setLocalSessionId(getSessionId());
+    setLocalConversationId(getConversationId());
   }, []);
 
   useEffect(() => {
@@ -47,10 +56,14 @@ export default function ChatLayout() {
     setInput('');
 
     try {
-      const res = await chat({ session_id: sessionId, message: text, answer_style: answerStyle });
+      const res = await chat({ session_id: sessionId, conversation_id: conversationId, message: text, answer_style: answerStyle });
       if (res.session_id) {
         setSessionId(res.session_id);
         setLocalSessionId(res.session_id);
+      }
+      if (res.conversation_id) {
+        setConversationId(res.conversation_id);
+        setLocalConversationId(res.conversation_id);
       }
       setMessages((prev) => [
         ...prev,
@@ -103,7 +116,7 @@ export default function ChatLayout() {
                   <span className="h-2 w-2 rounded-full bg-emerald-400" />
                   Session
                 </span>
-                <span className="font-mono">{shortSession(sessionId)}</span>
+                <span className="font-mono">{shortSession(conversationId || sessionId)}</span>
               </div>
             </div>
 
@@ -111,8 +124,10 @@ export default function ChatLayout() {
               <button
                 className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-left text-sm hover:bg-slate-800"
                 onClick={() => {
-                  clearSessionId();
-                  setLocalSessionId(null);
+                  const nextConversationId = createConversationId();
+                  clearConversationId();
+                  setConversationId(nextConversationId);
+                  setLocalConversationId(nextConversationId);
                   setMessages([]);
                   setError(null);
                 }}

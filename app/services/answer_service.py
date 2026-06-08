@@ -355,18 +355,25 @@ class AnswerService:
         stem = stems.get(target, target)
         return stem in article
 
-    async def answer(self, query: str, session_id: str | None = None, answer_style: str = 'detailed') -> dict:
+    async def answer(
+        self,
+        query: str,
+        session_id: str | None = None,
+        answer_style: str = 'detailed',
+        conversation_id: str | None = None,
+    ) -> dict:
         started = now_ms()
         request_id = gen_request_id()
         sid = self.memory.ensure_session(session_id)
-        state = self.memory.get_state(sid)
-        recent = self.memory.get_recent_messages(sid, limit=settings.CHAT_HISTORY_LIMIT)
+        cid = self.memory.ensure_conversation(sid, conversation_id)
+        state = self.memory.get_state(cid, session_id=sid)
+        recent = self.memory.get_recent_messages(cid, limit=settings.CHAT_HISTORY_LIMIT, session_id=sid)
         resolved = resolve_query(query, state, recent)
         resolved_query = resolved['resolved_query']
         expanded_query = self.expander.expand(resolved_query)
         slots = extract_slots(resolved_query)
 
-        self.memory.append_message(sid, role='user', content=query, request_id=request_id, metadata_json={'resolved_query': resolved_query})
+        self.memory.append_message(sid, cid, role='user', content=query, request_id=request_id, metadata_json={'resolved_query': resolved_query})
 
         routing_ctx = build_routing_context(query, state, recent)
         route = await route_query(
@@ -386,42 +393,42 @@ class AnswerService:
             answer = 'Не совсем понял запрос. Уточните, пожалуйста, товар, артикул или параметр (например: "артикулы гильз ONDO" или "паспорт на ONDO...").'
             log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['clarify'], latency_ms=now_ms() - started)
             payload = {
-                'session_id': sid, 'request_id': request_id, 'answer': answer,
+                'session_id': sid, 'conversation_id': cid, 'request_id': request_id, 'answer': answer,
                 'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
                 'answer_mode': 'clarify', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'low', 'tools_used': ['clarify'],
                 'retrieval_trace': [],
                 'route': router,
             }
-            self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'ambiguous_question', 'answer_mode': 'clarify'})
+            self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'ambiguous_question', 'answer_mode': 'clarify'})
             return payload
 
         if intent == 'smalltalk' or 'smalltalk' in tools:
             answer = self._smalltalk_answer(query)
             log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['smalltalk'], latency_ms=now_ms() - started)
             payload = {
-                'session_id': sid, 'request_id': request_id, 'answer': answer,
+                'session_id': sid, 'conversation_id': cid, 'request_id': request_id, 'answer': answer,
                 'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
                 'answer_mode': 'short_answer', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'high', 'tools_used': ['smalltalk'],
                 'retrieval_trace': [],
                 'route': router,
             }
-            self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': 'short_answer'})
+            self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': 'short_answer'})
             return payload
 
         if intent in {'out_of_scope', 'offtopic'} or 'refuse' in tools:
             answer = 'Я консультирую только по сантехническим товарам и связанной документации.'
             log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['refuse'], latency_ms=now_ms() - started)
             payload = {
-                'session_id': sid, 'request_id': request_id, 'answer': answer,
+                'session_id': sid, 'conversation_id': cid, 'request_id': request_id, 'answer': answer,
                 'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
                 'answer_mode': 'not_enough_data', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'high', 'tools_used': ['refuse'],
                 'retrieval_trace': [],
                 'route': router,
             }
-            self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent})
+            self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent})
             return payload
 
         article = routing_ctx.article or extract_article_candidate(resolved_query)
@@ -737,6 +744,7 @@ class AnswerService:
         latency = now_ms() - started
         response = {
             'session_id': sid,
+            'conversation_id': cid,
             'request_id': request_id,
             'answer': answer,
             'original_query': query,
@@ -756,6 +764,7 @@ class AnswerService:
         save_chat_request(
             request_id=request_id,
             session_id=sid,
+            conversation_id=cid,
             user_message=query,
             answer=answer,
             intent=intent,
@@ -780,6 +789,7 @@ class AnswerService:
         current_doc_id = sources[0]['doc_id'] if sources else state.get('current_doc_id')
 
         self.memory.update_state(
+            cid,
             sid,
             current_product=current_product,
             current_brand=current_brand,
@@ -791,7 +801,7 @@ class AnswerService:
             last_sources_json=sources,
             last_documents_json=documents,
         )
-        self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': answer_mode})
+        self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': answer_mode})
 
         if settings.ENABLE_ANSWER_EVALUATION:
             await evaluate_answer({'query': resolved_query, 'answer': answer, 'sources': sources})
