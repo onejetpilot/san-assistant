@@ -19,25 +19,100 @@ SYSTEM_PROMPT = """Ты ассистент веб-чата по сантехни
 """
 
 
+def _format_history(messages: list[dict]) -> str:
+    if not messages:
+        return 'NO_HISTORY'
+    lines = []
+    for idx, item in enumerate(messages, start=1):
+        role = item.get('role', 'unknown')
+        content = str(item.get('content', '')).strip()
+        if not content:
+            continue
+        lines.append(f"{idx}. {role}: {content}")
+    return '\n'.join(lines) if lines else 'NO_HISTORY'
+
+
+def _format_state(state: dict) -> str:
+    fields = [
+        ('current_article', 'Артикул'),
+        ('current_product', 'Товар'),
+        ('current_brand', 'Бренд'),
+        ('current_category', 'Категория'),
+    ]
+    lines = [f"- {label}: {state.get(key)}" for key, label in fields if state.get(key)]
+    return '\n'.join(lines) if lines else 'NO_STATE'
+
+
+def _format_router(decision: dict) -> str:
+    if not decision:
+        return 'NO_ROUTE'
+    fields = ['intent', 'selected_route', 'expected_answer_type', 'confidence', 'reason']
+    lines = [f"- {key}: {decision.get(key)}" for key in fields if decision.get(key) is not None]
+    tools = decision.get('tools') or decision.get('tools_to_call')
+    if tools:
+        lines.append(f"- tools: {', '.join(map(str, tools))}")
+    return '\n'.join(lines) if lines else 'NO_ROUTE'
+
+
+def _format_sku(sku: dict | None) -> str:
+    if not sku:
+        return 'NO_SKU'
+    fields = [
+        ('article', 'Артикул'),
+        ('product', 'Товар'),
+        ('brand', 'Бренд'),
+        ('category', 'Категория'),
+        ('article_type', 'Тип'),
+        ('short_description', 'Характеристики'),
+    ]
+    lines = [f"- {label}: {sku.get(key)}" for key, label in fields if sku.get(key)]
+    return '\n'.join(lines) if lines else 'NO_SKU'
+
+
+def _format_documents(documents: list[dict]) -> str:
+    if not documents:
+        return 'NO_DOCUMENTS'
+    lines = []
+    for idx, doc in enumerate(documents[:5], start=1):
+        title = doc.get('title', '')
+        doc_type = doc.get('type', 'other')
+        url = doc.get('public_url', '')
+        product = doc.get('product', '')
+        lines.append(f"{idx}. {title} ({doc_type}) | {product} | {url}".strip())
+    return '\n'.join(lines)
+
+
+def _format_web_results(results: list[dict]) -> str:
+    if not results:
+        return 'NO_WEB_RESULTS'
+    lines = []
+    for idx, item in enumerate(results[:5], start=1):
+        title = item.get('title', '')
+        url = item.get('url', '')
+        snippet = item.get('snippet', '')
+        lines.append(f"{idx}. {title} | {url} | {snippet}".strip())
+    return '\n'.join(lines)
+
+
 def build_user_prompt(payload: dict) -> str:
     rag_chunks = payload.get('rag_chunks') or []
-    rag_block = '\n---\n'.join(rag_chunks) if rag_chunks else 'NO_CONTEXT'
-    docs = payload.get('document_results') or []
-    docs_block = docs if docs else 'NO_DOCUMENTS'
-    recent_messages = payload.get('recent_messages') or []
+    rag_block = '\n\n--- RAG CHUNK ---\n\n'.join(str(chunk).strip() for chunk in rag_chunks if str(chunk).strip()) or 'NO_CONTEXT'
     return (
-        f"Запрос пользователя: {payload.get('original_query')}\n"
-        f"Разрешенный запрос с учетом контекста: {payload.get('resolved_query')}\n"
+        f"Запрос пользователя:\n{payload.get('original_query')}\n\n"
+        f"Запрос с учетом контекста:\n{payload.get('resolved_query')}\n\n"
         f"Режим ответа: {payload.get('answer_mode')}\n"
         f"Предпочтение длины: {payload.get('answer_style')}\n"
-        f"Решение роутера: {payload.get('router_decision')}\n"
-        f"Состояние диалога: {payload.get('conversation_state')}\n"
-        f"Краткая история: {recent_messages if recent_messages else 'NO_HISTORY'}\n"
-        f"Точное совпадение SKU: {payload.get('sku_result')}\n"
+        f"Уверенность retrieval: {payload.get('confidence')}\n\n"
+        f"Классификация запроса:\n{_format_router(payload.get('router_decision') or {})}\n\n"
+        f"Состояние диалога:\n{_format_state(payload.get('conversation_state') or {})}\n\n"
+        f"Краткая история:\n{_format_history(payload.get('recent_messages') or [])}\n\n"
+        f"Точное совпадение SKU:\n{_format_sku(payload.get('sku_result'))}\n\n"
         f"RAG-контекст для фактов:\n{rag_block}\n"
-        f"Документы:\n{docs_block}\n"
-        f"Web результаты: {payload.get('web_results')}\n"
-        f"Уверенность retrieval: {payload.get('confidence')}\n"
-        "Инструкция: не делай фактических выводов вне SKU/RAG/Documents/Web. "
-        "Если контекста нет, не придумывай ответ и предложи уточнение."
+        f"\nДокументы:\n{_format_documents(payload.get('document_results') or [])}\n\n"
+        f"Web результаты:\n{_format_web_results(payload.get('web_results') or [])}\n\n"
+        "Инструкция для ответа:\n"
+        "- Не делай фактических выводов вне SKU/RAG/Documents/Web.\n"
+        "- Если контекста нет или он не отвечает на вопрос, не придумывай ответ и предложи уточнить артикул, бренд или параметр.\n"
+        "- Если найден документ, дай название и ссылку.\n"
+        "- Не упоминай роутинг, инструменты, confidence и внутреннее устройство бота."
     )
