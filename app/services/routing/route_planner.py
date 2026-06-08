@@ -10,9 +10,9 @@ INTENT_ROUTE_MAP: dict[str, dict] = {
         'fallback_allowed': False,
     },
     'smalltalk': {
-        'selected_route': 'refuse',
-        'tools': ['refuse'],
-        'expected_answer_type': 'refusal',
+        'selected_route': 'smalltalk',
+        'tools': ['smalltalk'],
+        'expected_answer_type': 'smalltalk',
         'fallback_allowed': False,
     },
     'ambiguous_question': {

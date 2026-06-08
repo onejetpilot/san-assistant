@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { chat, clearAccessToken, ApiError } from '../../lib/api';
-import { clearSessionId, setSessionId } from '../../lib/storage';
+import { clearSessionId, getSessionId, setSessionId } from '../../lib/storage';
 import type { AnswerStyle, Message } from '../../lib/types';
 import TokenGate from '../auth/TokenGate';
 import ChatInput from './ChatInput';
@@ -26,9 +26,7 @@ export default function ChatLayout() {
   const listRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
-    // Start every browser chat session with fresh backend context.
-    clearSessionId();
-    setLocalSessionId(null);
+    setLocalSessionId(getSessionId());
   }, []);
 
   useEffect(() => {

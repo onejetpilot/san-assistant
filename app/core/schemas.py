@@ -1,10 +1,20 @@
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+from app.core.config import settings
 
 
 class ChatRequest(BaseModel):
     session_id: str | None = None
-    message: str
+    message: str = Field(min_length=1, max_length=settings.CHAT_MAX_MESSAGE_CHARS)
     answer_style: str = 'detailed'
+
+    @field_validator('message')
+    @classmethod
+    def validate_message(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError('Message must not be empty.')
+        return cleaned
 
 
 class SourceItem(BaseModel):

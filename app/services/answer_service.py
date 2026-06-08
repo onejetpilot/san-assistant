@@ -36,9 +36,11 @@ from app.utils.timing import now_ms
 from app.web_search.san_team_search import SanTeamSearch
 from app.evaluation.answer_judge import evaluate_answer
 from app.utils.article_normalizer import normalize_article
+from app.core.logging import get_logger
 
 
 INJECTION_PATTERNS = ['ignore previous instructions', 'system prompt', 'developer message']
+logger = get_logger('answer_service')
 
 
 class AnswerService:
@@ -62,6 +64,39 @@ class AnswerService:
         for pat in INJECTION_PATTERNS:
             out = re.sub(pat, '[REMOVED]', out, flags=re.IGNORECASE)
         return out
+
+    @staticmethod
+    def _smalltalk_answer(query: str) -> str:
+        q = query.lower()
+        if any(token in q for token in ['спасибо', 'благодар']):
+            return 'Пожалуйста. Если нужен подбор, артикул или документ по товару, напишите запрос.'
+        if any(token in q for token in ['пока', 'до свидания']):
+            return 'Если понадобится информация по товарам или документам, возвращайтесь.'
+        return 'Здравствуйте. Помогу с подбором, артикулами, характеристиками и документами по сантехническим товарам.'
+
+    @staticmethod
+    def _history_for_llm(messages: list[dict], limit: int) -> list[dict]:
+        compact: list[dict] = []
+        for item in messages[-limit:]:
+            role = item.get('role', '')
+            content = str(item.get('content', '')).strip()
+            if not role or not content:
+                continue
+            compact.append({'role': role, 'content': content[:500]})
+        return compact
+
+    @staticmethod
+    def _log_prompt_preview(request_id: str, system_prompt: str, user_prompt: str) -> None:
+        logger.info(
+            'llm_prompt_preview',
+            extra={
+                'extra_data': {
+                    'request_id': request_id,
+                    'system_prompt_preview': system_prompt[:settings.LLM_PROMPT_PREVIEW_CHARS],
+                    'user_prompt_preview': user_prompt[:settings.LLM_PROMPT_PREVIEW_CHARS],
+                },
+            },
+        )
 
     @staticmethod
     def _format_sku_answer(sku: SkuRecord) -> str:
@@ -325,7 +360,7 @@ class AnswerService:
         request_id = gen_request_id()
         sid = self.memory.ensure_session(session_id)
         state = self.memory.get_state(sid)
-        recent = self.memory.get_recent_messages(sid, limit=10)
+        recent = self.memory.get_recent_messages(sid, limit=settings.CHAT_HISTORY_LIMIT)
         resolved = resolve_query(query, state, recent)
         resolved_query = resolved['resolved_query']
         expanded_query = self.expander.expand(resolved_query)
@@ -361,7 +396,21 @@ class AnswerService:
             self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'ambiguous_question', 'answer_mode': 'clarify'})
             return payload
 
-        if intent in {'out_of_scope', 'offtopic', 'smalltalk'} or 'refuse' in tools:
+        if intent == 'smalltalk' or 'smalltalk' in tools:
+            answer = self._smalltalk_answer(query)
+            log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['smalltalk'], latency_ms=now_ms() - started)
+            payload = {
+                'session_id': sid, 'request_id': request_id, 'answer': answer,
+                'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
+                'answer_mode': 'short_answer', 'sources': [], 'documents': [], 'used_web_search': False,
+                'web_results': [], 'confidence': 'high', 'tools_used': ['smalltalk'],
+                'retrieval_trace': [],
+                'route': router,
+            }
+            self.memory.append_message(sid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': 'short_answer'})
+            return payload
+
+        if intent in {'out_of_scope', 'offtopic'} or 'refuse' in tools:
             answer = 'Я консультирую только по сантехническим товарам и связанной документации.'
             log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['refuse'], latency_ms=now_ms() - started)
             payload = {
@@ -633,7 +682,7 @@ class AnswerService:
                         'original_query': query,
                         'resolved_query': resolved_query,
                         'conversation_state': state,
-                        'recent_messages': recent[-10:] if route.use_history or resolved.get('depends_on_history') else [],
+                        'recent_messages': self._history_for_llm(recent, settings.CHAT_HISTORY_FOR_LLM) if route.use_history or resolved.get('depends_on_history') else [],
                         'router_decision': router,
                         'sku_result': sku_result.model_dump() if sku_result else None,
                         'product_cards': [],
@@ -644,6 +693,7 @@ class AnswerService:
                         'answer_mode': answer_mode,
                         'answer_style': answer_style,
                     })
+                    self._log_prompt_preview(request_id, SYSTEM_PROMPT, prompt)
                     answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
         except Exception:
             fallback_used = True

@@ -55,6 +55,12 @@ def test_out_of_scope_refuses(service):
     assert 'refuse' in resp['tools_used']
 
 
+def test_smalltalk_returns_greeting(service):
+    resp = asyncio.run(service.answer('Привет'))
+    assert 'помогу' in resp['answer'].lower() or 'здравствуйте' in resp['answer'].lower()
+    assert resp['tools_used'] == ['smalltalk']
+
+
 def test_ambiguous_asks_clarification(service):
     resp = asyncio.run(service.answer('Что лучше?'))
     assert resp['answer_mode'] == 'clarify'

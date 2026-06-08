@@ -27,24 +27,32 @@ class DocumentSearch:
             return self._fallback_search(query, article, doc_type, top_k)
         all_rows = self.collection.get(include=['metadatas'])
         metas = all_rows.get('metadatas', [])
+        out: list[dict] = []
         if article:
             norm = normalize_article(article)
             matched = [m for m in metas if norm in [normalize_article(x) for x in self._articles_as_list(m.get('articles'))]]
             if matched:
-                return [self._as_result(m, 0.99) for m in matched]
-        if doc_type:
-            type_rows = [m for m in metas if m.get('type') == doc_type]
-            if type_rows:
-                return [self._as_result(m, 0.9) for m in type_rows[:top_k]]
+                out.extend([self._as_result(m, 0.99) for m in matched])
         try:
             qv = EmbeddingClient().embed_texts_sync([query])[0]
             res = self.collection.query(query_embeddings=[qv], n_results=top_k)
         except Exception:
             return self._fallback_search(query, article, doc_type, top_k)
-        out = []
+
         for m, dist in zip(res.get('metadatas', [[]])[0], res.get('distances', [[]])[0]):
-            out.append(self._as_result(m, 1.0 - float(dist or 1.0)))
-        return out
+            score = 1.0 - float(dist or 1.0)
+            if doc_type and m.get('type') == doc_type:
+                score += 0.12
+            if article:
+                norm = normalize_article(article)
+                if norm in [normalize_article(x) for x in self._articles_as_list(m.get('articles'))]:
+                    score += 0.2
+            out.append(self._as_result(m, min(score, 1.0)))
+
+        if doc_type:
+            out = [row for row in out if row.get('type') == doc_type or row.get('score', 0) >= settings.DOCUMENT_MIN_SCORE]
+        out = self._dedupe_and_sort(out, preferred_type=doc_type)
+        return out[:top_k]
 
     @staticmethod
     def _as_result(m: dict, score: float) -> dict:
@@ -77,7 +85,9 @@ class DocumentSearch:
             norm = normalize_article(article)
             hit = [r for r in rows if norm in [normalize_article(x) for x in self._articles_as_list(r.get('articles'))]]
             if hit:
-                return [self._as_result(r, 0.95) for r in hit[:top_k]]
+                typed = [r for r in hit if not doc_type or r.get('type') == doc_type]
+                source = typed or hit
+                return [self._as_result(r, 0.95) for r in source[:top_k]]
         if doc_type:
             hit = [r for r in rows if r.get('type') == doc_type]
             if hit:
@@ -85,3 +95,17 @@ class DocumentSearch:
         q = query.lower()
         hit = [r for r in rows if q in f"{r.get('title','')} {r.get('product','')} {r.get('brand','')} {r.get('category','')}".lower()]
         return [self._as_result(r, 0.6) for r in hit[:top_k]]
+
+    @staticmethod
+    def _dedupe_and_sort(rows: list[dict], preferred_type: str | None = None) -> list[dict]:
+        deduped: dict[tuple[str, str], dict] = {}
+        for row in rows:
+            key = (row.get('title', ''), row.get('public_url', ''))
+            current = deduped.get(key)
+            if not current or row.get('score', 0) > current.get('score', 0):
+                deduped[key] = row
+        return sorted(
+            deduped.values(),
+            key=lambda row: (row.get('type') == preferred_type if preferred_type else False, row.get('score', 0)),
+            reverse=True,
+        )

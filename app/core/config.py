@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = 'openai/gpt-4o-mini'
     LLM_TEMPERATURE: float = 0.2
     LLM_TIMEOUT_SECONDS: int = 60
+    LLM_PROMPT_PREVIEW_CHARS: int = 2000
 
     EMBEDDING_PROVIDER: str = 'openai_compatible'
     EMBEDDING_API_KEY: str = ''
@@ -43,6 +44,10 @@ class Settings(BaseSettings):
 
     DATABASE_URL: str = 'sqlite:///./data/app.db'
     ADMIN_ENABLED: bool = True
+    CHAT_MAX_MESSAGE_CHARS: int = 2000
+    CHAT_HISTORY_LIMIT: int = 12
+    CHAT_HISTORY_FOR_LLM: int = 6
+    DOCUMENT_MIN_SCORE: float = 0.45
 
 
 settings = Settings()

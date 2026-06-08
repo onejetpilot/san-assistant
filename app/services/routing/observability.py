@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.services.routing.models import RouteDecision, RoutingContext
 
@@ -21,8 +22,8 @@ def log_routing_decision(
         extra={
             'extra_data': {
                 'request_id': request_id,
-                'user_query': ctx.original_query,
-                'resolved_query': ctx.resolved_query,
+                'user_query': ctx.original_query[:settings.LLM_PROMPT_PREVIEW_CHARS],
+                'resolved_query': ctx.resolved_query[:settings.LLM_PROMPT_PREVIEW_CHARS],
                 'detected_intent': decision.intent,
                 'selected_route': decision.selected_route,
                 'confidence': decision.confidence,
