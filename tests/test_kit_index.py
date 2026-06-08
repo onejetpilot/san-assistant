@@ -1,4 +1,4 @@
-from app.indexes.kit_index import build_kit_index
+from app.indexes.kit_index import KitIndex, build_kit_index
 from app.rag.parser import ParsedRagDocument, RagSection
 
 
@@ -59,4 +59,18 @@ def test_does_not_treat_regular_variant_as_kit():
         },
     )
     idx = build_kit_index([d])
+    assert idx.lookup('OXF01612') is None
+
+
+def test_lookup_ignores_dirty_legacy_kit_rows():
+    idx = KitIndex({
+        'OXF01612': {
+            'kit_article': 'OXF01612',
+            'doc_id': 'legacy',
+            'source_file': 'legacy.txt',
+            'components': ['диаметр'],
+            'component_articles': ['диаметр'],
+        }
+    })
+
     assert idx.lookup('OXF01612') is None

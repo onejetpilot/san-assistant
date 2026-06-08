@@ -106,9 +106,6 @@ def _extract_kit_components(variant_desc: str) -> list[str]:
         if m:
             parts.append(re.sub(r'\s+', ' ', m.group(1)).strip())
             continue
-        art = re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})', token)
-        if art:
-            parts.append(art.group(1))
     return parts
 
 

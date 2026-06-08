@@ -77,6 +77,41 @@ def test_article_lookup_uses_sku_not_llm(service):
     assert 'LLM_SHOULD_NOT_BE_CALLED' not in resp['answer']
 
 
+def test_article_lookup_ignores_dirty_kit_components(service):
+    row = service.sku.lookup('OXF01612')
+    service.sku.data['OXF01612']['kit_components'] = ['диаметр']
+    service.kits = KitIndex({
+        'OXF01612': {
+            'kit_article': 'OXF01612',
+            'doc_id': 'legacy',
+            'source_file': 'legacy.txt',
+            'components': ['диаметр'],
+            'component_articles': ['диаметр'],
+        }
+    })
+
+    resp = asyncio.run(service.answer('Что за OXF01612?', answer_style='short'))
+
+    assert row is not None
+    assert 'Артикул OXF01612' in resp['answer']
+    assert 'Состав комплекта' not in resp['answer']
+
+
+def test_document_request_without_documents_does_not_call_llm(service):
+    async def _llm_forbidden(*args, **kwargs):
+        raise AssertionError('document miss should use fallback, not LLM')
+
+    service.llm.chat = _llm_forbidden
+
+    resp = asyncio.run(service.answer('Дай паспорт на OXF01612', answer_style='short'))
+
+    assert resp['answer_mode'] == 'document_answer'
+    assert 'документ' in resp['answer'].lower()
+    assert 'fallback' in resp['tools_used']
+    assert 'llm' not in resp['tools_used']
+    assert any(item['meta'].get('tool') == 'fallback' for item in resp['retrieval_trace'])
+
+
 def test_no_rag_context_fallback(service):
     async def _no_llm(*a, **k):
         raise AssertionError('LLM must not be called without RAG context')

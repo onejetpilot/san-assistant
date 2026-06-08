@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from functools import lru_cache
 
 from app.core.config import settings
 from app.core.llm_client import OpenAICompatibleLLMClient
@@ -9,7 +10,7 @@ from app.core.prompts import SYSTEM_PROMPT, build_user_prompt
 from app.documents.document_search import DocumentSearch
 from app.indexes.sku_index import SkuIndex, SkuRecord
 from app.indexes.kit_index import KitIndex, KitRecord
-from app.rag.retriever import RagRetriever
+from app.rag.retriever import RagRetriever, RetrievedChunk
 from app.services.confidence import compute_confidence
 from app.services.conversation_memory import ConversationMemoryService
 from app.services.query_expander import QueryExpander
@@ -43,6 +44,18 @@ INJECTION_PATTERNS = ['ignore previous instructions', 'system prompt', 'develope
 logger = get_logger('answer_service')
 
 
+def _valid_kit_components(components: list[str]) -> bool:
+    return bool(components) and all(re.search(r'\d+\s*шт\.?\s*[A-Za-zА-Яа-я0-9._\-/]{4,}', c, flags=re.IGNORECASE) for c in components)
+
+
+@lru_cache(maxsize=16)
+def _read_source_file(path: str) -> str:
+    p = Path(path)
+    if not p.exists() or not p.is_file():
+        return ''
+    return p.read_text(encoding='utf-8')[:12000]
+
+
 class AnswerService:
     def __init__(self) -> None:
         self.rag = RagRetriever()
@@ -64,6 +77,47 @@ class AnswerService:
         for pat in INJECTION_PATTERNS:
             out = re.sub(pat, '[REMOVED]', out, flags=re.IGNORECASE)
         return out
+
+    def _fallback_rag_context(self, query: str, sku: SkuRecord | None = None) -> list[RetrievedChunk]:
+        q = query.lower()
+        looks_ondo_axial = any(token in q for token in [
+            'ondo', 'ондо', 'аксиал', 'гильз', 'муфт', 'угол', 'тройник',
+            '16х', '16x', '20х', '20x', 'pex', 'рехау', 'rehau',
+        ])
+        if not looks_ondo_axial and not sku:
+            return []
+
+        candidates: list[dict] = []
+        if sku and sku.source_file:
+            candidates.append(sku.model_dump())
+        else:
+            for row in self.sku.data.values():
+                source = str(row.get('source_file', ''))
+                product = str(row.get('product', '')).lower()
+                brand = str(row.get('brand', '')).lower()
+                if ('ondo' in brand or 'ondo' in product or 'аксиаль' in product) and source:
+                    candidates.append(row)
+                    break
+        if not candidates:
+            return []
+
+        row = candidates[0]
+        text = _read_source_file(str(row.get('source_file', '')))
+        if not text:
+            return []
+        return [RetrievedChunk(
+            text=text,
+            metadata={
+                'doc_id': row.get('doc_id', ''),
+                'product': row.get('product', ''),
+                'brand': row.get('brand', ''),
+                'category': row.get('category', ''),
+                'section_group': 'fallback_source_file',
+                'section': 'SOURCE_FILE',
+                'source_file': row.get('source_file', ''),
+            },
+            score=0.22,
+        )]
 
     @staticmethod
     def _smalltalk_answer(query: str) -> str:
@@ -444,7 +498,7 @@ class AnswerService:
             kit_from_global = self.kits.lookup(article)
             if not kit_from_global:
                 empty_results.append('kit_lookup')
-        elif article and not kit_from_global:
+        elif article and not kit_from_global and re.search(r'K\d', article, flags=re.IGNORECASE):
             kit_from_global = self.kits.lookup(article)
 
         rag_results: list = []
@@ -454,6 +508,10 @@ class AnswerService:
             rag_results = self.rag.search(expanded_query)
             if not rag_results:
                 empty_results.append('rag_search')
+        if route.uses_tool('rag_search') and not rag_results:
+            rag_results = self._fallback_rag_context(resolved_query, sku_result)
+            if rag_results and 'rag_search' in empty_results:
+                empty_results.remove('rag_search')
         section_groups = preferred_section_groups(intent, slots)
         rag_results = prioritize_chunks(rag_results, section_groups)
         rag_results_strong = filter_relevant_chunks(rag_results)
@@ -540,17 +598,6 @@ class AnswerService:
             'score': r.score,
         } for r in display_rag[:5]]
         documents = [{'title': d['title'], 'type': d['type'], 'product': d['product'], 'brand': d['brand'], 'public_url': d['public_url']} for d in doc_results]
-        retrieval_trace = self._build_retrieval_trace(
-            query=resolved_query,
-            article=article,
-            sku_result=sku_result,
-            kit_from_global=kit_from_global,
-            rag_results=display_rag,
-            documents=documents,
-            web_results=web_results,
-            tools_called=tools_called,
-            empty_results=empty_results,
-        )
 
         # LLM fallback-safe answer
         answer = ''
@@ -566,7 +613,7 @@ class AnswerService:
         asks_composition = slots.asks_composition or any(k in ql for k in composition_keywords)
         asks_dimension = slots.intent_hint == 'dimension' or slots.dimension_name in {'length', 'dimension'}
         target_type = slots.item_type
-        kit_components = sku_result.kit_components if sku_result and sku_result.kit_components else []
+        kit_components = sku_result.kit_components if sku_result and _valid_kit_components(sku_result.kit_components) else []
         if not kit_components and kit_from_global:
             kit_components = kit_from_global.components
 
@@ -665,6 +712,10 @@ class AnswerService:
             answer = 'Найдены документы:\n' + '\n'.join(
                 f"- {d['title']} ({d['type']}): {d['public_url']}" for d in documents[:5]
             )
+        if not answer and intent == 'document_request' and not documents:
+            answer = build_no_context_fallback(intent)
+            fallback_used = True
+            tools_called.append('fallback')
 
         rag_usable = has_strong_rag_context(rag_results) or (
             intent in KB_SYNTHESIS_INTENTS and has_weak_rag_context(rag_results)
@@ -742,6 +793,17 @@ class AnswerService:
 
         versions = get_current_index_versions()
         latency = now_ms() - started
+        retrieval_trace = self._build_retrieval_trace(
+            query=resolved_query,
+            article=article,
+            sku_result=sku_result,
+            kit_from_global=kit_from_global,
+            rag_results=display_rag,
+            documents=documents,
+            web_results=web_results,
+            tools_called=tools_called,
+            empty_results=empty_results,
+        )
         response = {
             'session_id': sid,
             'conversation_id': cid,

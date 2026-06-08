@@ -24,7 +24,10 @@ class KitIndex:
 
     def lookup(self, article: str) -> KitRecord | None:
         row = self.data.get(normalize_article(article))
-        return KitRecord(**row) if row else None
+        if not row:
+            return None
+        record = KitRecord(**row)
+        return record if _has_valid_components(record.components) else None
 
     def save(self, path: str) -> None:
         Path(path).parent.mkdir(parents=True, exist_ok=True)
@@ -81,13 +84,13 @@ def _extract_components(rhs: str) -> list[str]:
         m = re.search(r'(\d+\s*шт\.?\s*[A-Za-zА-Яа-я0-9._\-/]+)', token, flags=re.IGNORECASE)
         if m:
             parts.append(re.sub(r'\s+', ' ', m.group(1)).strip())
-        else:
-            a = re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})', token)
-            if a:
-                parts.append(a.group(1))
     return parts
 
 
 def _extract_article_from_component(text: str) -> str:
     m = re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', text.strip())
     return m.group(1) if m else ''
+
+
+def _has_valid_components(components: list[str]) -> bool:
+    return bool(components) and all(re.search(r'\d+\s*шт\.?\s*[A-Za-zА-Яа-я0-9._\-/]{4,}', c, flags=re.IGNORECASE) for c in components)
