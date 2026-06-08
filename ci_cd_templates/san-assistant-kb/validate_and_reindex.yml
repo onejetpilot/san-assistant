@@ -36,11 +36,12 @@ jobs:
         env:
           APP_BASE_URL: ${{ secrets.APP_BASE_URL }}
           APP_ACCESS_TOKEN: ${{ secrets.APP_ACCESS_TOKEN }}
+          LIVE_ANSWER_EVAL_STRICT: ${{ vars.LIVE_ANSWER_EVAL_STRICT }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           password: ${{ secrets.SSH_PASSWORD }}
-          envs: APP_BASE_URL,APP_ACCESS_TOKEN
+          envs: APP_BASE_URL,APP_ACCESS_TOKEN,LIVE_ANSWER_EVAL_STRICT
           script: |
             set -euo pipefail
             cd /opt/san-assistant
