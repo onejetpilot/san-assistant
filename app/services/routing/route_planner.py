@@ -38,6 +38,32 @@ INTENT_ROUTE_MAP: dict[str, dict] = {
         'expected_answer_type': 'exact_product',
         'fallback_allowed': True,
     },
+    'kit_composition_question': {
+        'selected_route': 'product_lookup',
+        'tools': ['sku_lookup', 'kit_lookup', 'rag_search'],
+        'expected_answer_type': 'kit_composition',
+        'fallback_allowed': True,
+    },
+    'compatibility_question': {
+        'selected_route': 'hybrid',
+        'tools': ['sku_lookup', 'rag_search'],
+        'expected_answer_type': 'compatibility',
+    },
+    'related_product_question': {
+        'selected_route': 'hybrid',
+        'tools': ['sku_lookup', 'rag_search'],
+        'expected_answer_type': 'related_product',
+    },
+    'assortment_question': {
+        'selected_route': 'hybrid',
+        'tools': ['sku_lookup', 'rag_search'],
+        'expected_answer_type': 'assortment',
+    },
+    'technical_spec_question': {
+        'selected_route': 'hybrid',
+        'tools': ['sku_lookup', 'rag_search'],
+        'expected_answer_type': 'technical',
+    },
     'comparison_question': {
         'selected_route': 'hybrid',
         'tools': ['sku_lookup', 'rag_search'],
@@ -95,12 +121,12 @@ def plan_route(ctx: RoutingContext, intent: str, confidence: float, reason: str)
     if intent == 'comparison_question' and not ctx.article:
         tools = [t for t in tools if t != 'sku_lookup']
 
-    if ctx.slots.asks_composition and ctx.article:
+    if (intent == 'kit_composition_question' or ctx.slots.asks_composition) and ctx.article:
         if 'kit_lookup' not in tools:
             insert_at = tools.index('sku_lookup') + 1 if 'sku_lookup' in tools else 0
             tools.insert(insert_at, 'kit_lookup')
 
-    if intent == 'knowledge_base_question' and ctx.article and ctx.slots.dimension_name:
+    if intent in {'knowledge_base_question', 'technical_spec_question', 'compatibility_question', 'related_product_question'} and ctx.article:
         if 'sku_lookup' not in tools:
             tools.insert(0, 'sku_lookup')
 

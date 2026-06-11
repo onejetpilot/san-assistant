@@ -11,6 +11,10 @@ RAG_WEAK_SCORE = max(settings.RAG_MIN_SCORE, 0.15)
 
 KB_SYNTHESIS_INTENTS = frozenset({
     'knowledge_base_question',
+    'compatibility_question',
+    'related_product_question',
+    'assortment_question',
+    'technical_spec_question',
     'installation_or_usage_question',
     'warranty_question',
     'comparison_question',
@@ -24,6 +28,11 @@ SECTION_HINTS_BY_INTENT = {
     'warranty_question': ['warranty_storage', 'faq', 'overview'],
     'document_request': ['overview', 'articles'],
     'article_lookup': ['article_row', 'articles', 'technical'],
+    'kit_composition_question': ['article_row', 'articles', 'technical'],
+    'compatibility_question': ['technical', 'article_row', 'articles', 'faq'],
+    'related_product_question': ['article_row', 'articles', 'technical'],
+    'assortment_question': ['article_row', 'articles', 'technical'],
+    'technical_spec_question': ['technical', 'article_row', 'faq'],
     'product_question': ['article_row', 'articles', 'overview', 'technical'],
     'comparison_question': ['article_row', 'articles', 'technical', 'overview'],
     'price_or_availability_question': ['article_row', 'articles'],
@@ -104,6 +113,6 @@ def top_rag_score(chunks: list[RetrievedChunk]) -> float:
 def build_no_context_fallback(intent: str) -> str:
     if intent == 'document_request':
         return 'В базе документов не нашёл подходящий файл. Уточните артикул, бренд или тип документа (паспорт, инструкция, сертификат).'
-    if intent in {'article_lookup', 'product_question', 'price_or_availability_question'}:
+    if intent in {'article_lookup', 'kit_composition_question', 'product_question', 'price_or_availability_question'}:
         return 'В каталоге не нашёл точного совпадения. Уточните артикул, бренд или параметры товара.'
     return 'В базе знаний не нашёл точной информации по этому вопросу. Попробуйте уточнить запрос или указать артикул/бренд.'

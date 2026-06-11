@@ -7,6 +7,7 @@ from functools import lru_cache
 from app.core.config import settings
 from app.core.llm_client import OpenAICompatibleLLMClient
 from app.core.prompts import SYSTEM_PROMPT, build_user_prompt
+from app.domain.product_reasoner import ProductReasoner
 from app.documents.document_search import DocumentSearch
 from app.indexes.sku_index import SkuIndex, SkuRecord
 from app.indexes.kit_index import KitIndex, KitRecord
@@ -71,6 +72,7 @@ class AnswerService:
         self.web = SanTeamSearch()
         self.memory = ConversationMemoryService()
         self.expander = QueryExpander()
+        self.reasoner = ProductReasoner(self.sku)
 
     def _sanitize_context(self, text: str) -> str:
         out = text
@@ -416,6 +418,8 @@ class AnswerService:
         answer_style: str = 'detailed',
         conversation_id: str | None = None,
     ) -> dict:
+        if not getattr(self, 'reasoner', None):
+            self.reasoner = ProductReasoner(self.sku)
         started = now_ms()
         request_id = gen_request_id()
         sid = self.memory.ensure_session(session_id)
@@ -578,6 +582,8 @@ class AnswerService:
         answer_mode = 'short_answer'
         if intent in {'installation_or_usage_question', 'installation_question', 'warranty_question'}:
             answer_mode = 'technical_answer'
+        if intent in {'compatibility_question', 'related_product_question', 'assortment_question', 'technical_spec_question'}:
+            answer_mode = 'technical_answer'
         if intent == 'document_request':
             answer_mode = 'document_answer'
         if intent == 'comparison_question' or 'сравн' in ql:
@@ -598,9 +604,20 @@ class AnswerService:
             'score': r.score,
         } for r in display_rag[:5]]
         documents = [{'title': d['title'], 'type': d['type'], 'product': d['product'], 'brand': d['brand'], 'public_url': d['public_url']} for d in doc_results]
+        product_evidence = self.reasoner.build_evidence(
+            original_query=query,
+            resolved_query=resolved_query,
+            intent=intent,
+            slots=slots,
+            sku_result=sku_result,
+            kit_result=kit_from_global,
+            rag_results=display_rag,
+            documents=documents,
+        )
 
-        # LLM fallback-safe answer
         answer = ''
+        final_answer_source = 'llm_composed'
+        deterministic_reason = ''
         composition_keywords = (
             'из чего состоит',
             'состав',
@@ -617,150 +634,55 @@ class AnswerService:
         if not kit_components and kit_from_global:
             kit_components = kit_from_global.components
 
-        if kit_from_global and (asks_composition or intent == 'article_lookup'):
-            answer = self._format_kit_answer(kit_from_global, sku_result)
-        elif sku_result and kit_components and asks_composition:
-            component_articles = [
-                re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', c).group(1)
-                for c in kit_components
-                if re.search(r'([A-Za-zА-Яа-я0-9._\-/]{4,})$', c)
-            ]
-            kit = KitRecord(
-                kit_article=sku_result.article,
-                doc_id=sku_result.doc_id,
-                source_file=sku_result.source_file,
-                components=kit_components,
-                component_articles=component_articles,
-            )
-            answer = self._format_kit_answer(kit, sku_result)
-        elif sku_result and asks_dimension:
-            answer = self._format_dimension_answer(sku_result, slots.dimension_name)
-        elif sku_result and intent == 'article_lookup':
-            answer = self._format_sku_answer(sku_result)
-
-        if not answer and slots.asks_compatibility:
-            answer = self._format_pipe_compatibility_answer(resolved_query, rag_results)
-
-        if not answer:
-            answer = self._format_known_or_missing_spec_answer(resolved_query, rag_results)
-
-        # Deterministic size answer by article type + dimension, to avoid mixing types (e.g. гильза vs муфта).
-        if not answer and asks_dimension and target_type:
-            diameter = slots.dimension_value
-            candidates = []
-            for row in self.sku.data.values():
-                at = str(row.get('article_type', '')).lower()
-                if not self._matches_item_type(target_type, at):
-                    continue
-                if slots.brand and str(row.get('brand', '')).upper() != slots.brand:
-                    continue
-                short = str(row.get('short_description', ''))
-                if diameter and not re.search(rf'(^|\D){re.escape(diameter)}(\D|$)', short):
-                    continue
-                art = str(row.get('article', ''))
-                if not art:
-                    continue
-                candidates.append((art, short))
-            if candidates:
-                unique = []
-                seen = set()
-                for art, short in candidates:
-                    if art in seen:
-                        continue
-                    seen.add(art)
-                    unique.append((art, short))
-                top = unique[:3]
-                if len(top) == 1:
-                    row = self.sku.lookup(top[0][0])
-                    if row:
-                        answer = self._format_dimension_answer(row, slots.dimension_name)
-                if not answer:
-                    lines = [f"Найдено по запросу ({target_type}):"]
-                    for art, short in top:
-                        lines.append(f"- {art}: {short}")
-                    answer = '\n'.join(lines)
-
-        # Deterministic article list by item_type (and optional brand).
-        if not answer and slots.asks_articles_list and target_type:
-            articles = []
-            for row in self.sku.data.values():
-                at = str(row.get('article_type', '')).lower()
-                if not self._matches_item_type(target_type, at):
-                    continue
-                if slots.brand and str(row.get('brand', '')).upper() != slots.brand:
-                    continue
-                a = str(row.get('article', '')).strip()
-                if a:
-                    articles.append(a)
-            articles = list(dict.fromkeys(articles))
-            if articles:
-                hdr = f"Артикулы {target_type}"
-                if slots.brand:
-                    hdr += f" {slots.brand}"
-                lines = [hdr + ':']
-                lines.extend([f"- {a}" for a in articles[:30]])
-                answer = '\n'.join(lines)
-
         if comparison_block:
-            answer = (
-                'Сравнение:\n'
-                f"- Что общего: {comparison_block['common']}\n"
-                f"- Чем отличаются: {'; '.join(comparison_block['differences'])}\n"
-                f"- Для каких случаев: {'; '.join(comparison_block['use_cases'])}"
+            product_evidence.answer_hints.append(
+                f"Сравнение: {comparison_block['common']}; {'; '.join(comparison_block['differences'])}"
             )
-        if not answer and intent == 'document_request' and documents:
-            answer = 'Найдены документы:\n' + '\n'.join(
-                f"- {d['title']} ({d['type']}): {d['public_url']}" for d in documents[:5]
-            )
-        if not answer and intent == 'document_request' and not documents:
-            answer = build_no_context_fallback(intent)
-            fallback_used = True
-            tools_called.append('fallback')
 
         rag_usable = has_strong_rag_context(rag_results) or (
             intent in KB_SYNTHESIS_INTENTS and has_weak_rag_context(rag_results)
         )
-        has_evidence = bool(sku_result or kit_from_global or documents or rag_usable or web_results)
-        if not answer and not has_evidence and route.fallback_allowed:
-            answer = build_no_context_fallback(intent)
-            fallback_used = True
-            tools_called.append('fallback')
+        has_evidence = bool(sku_result or kit_from_global or documents or rag_usable or web_results or product_evidence.decision or product_evidence.answer_hints)
 
-        rag_only_intents = {'knowledge_base_question', 'installation_or_usage_question', 'warranty_question'}
+        rag_only_intents = set()
         try:
-            if not answer:
-                rag_for_prompt = chunks_for_llm(rag_results, intent, slots)
-                if intent in rag_only_intents and not rag_for_prompt and not sku_result and not documents:
-                    answer = build_no_context_fallback(intent)
-                    fallback_used = True
-                    tools_called.append('fallback')
-                else:
-                    tools_called.append('llm')
-                    prompt = build_user_prompt({
-                        'original_query': query,
-                        'resolved_query': resolved_query,
-                        'conversation_state': state,
-                        'recent_messages': self._history_for_llm(recent, settings.CHAT_HISTORY_FOR_LLM) if route.use_history or resolved.get('depends_on_history') else [],
-                        'router_decision': router,
-                        'sku_result': sku_result.model_dump() if sku_result else None,
-                        'product_cards': [],
-                        'rag_chunks': [self._sanitize_context(r.text) for r in rag_for_prompt[:5]],
-                        'document_results': documents,
-                        'web_results': web_results,
-                        'confidence': conf,
-                        'answer_mode': answer_mode,
-                        'answer_style': answer_style,
-                    })
-                    self._log_prompt_preview(request_id, SYSTEM_PROMPT, prompt)
-                    answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
+            rag_for_prompt = chunks_for_llm(rag_results, intent, slots)
+            tools_called.append('llm')
+            prompt = build_user_prompt({
+                'original_query': query,
+                'resolved_query': resolved_query,
+                'conversation_state': state,
+                'recent_messages': self._history_for_llm(recent, settings.CHAT_HISTORY_FOR_LLM) if route.use_history or resolved.get('depends_on_history') else [],
+                'router_decision': router,
+                'sku_result': sku_result.model_dump() if sku_result else None,
+                'product_evidence': product_evidence.model_dump(),
+                'product_cards': [],
+                'rag_chunks': [self._sanitize_context(r.text) for r in rag_for_prompt[:5]],
+                'document_results': documents,
+                'web_results': web_results,
+                'confidence': conf,
+                'answer_mode': answer_mode,
+                'answer_style': answer_style,
+            })
+            self._log_prompt_preview(request_id, SYSTEM_PROMPT, prompt)
+            answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
+            final_answer_source = 'llm_composed'
         except Exception:
             fallback_used = True
-            if sku_result:
+            composed = self.reasoner.compose_deterministic_answer(product_evidence, sku_result=sku_result)
+            if composed:
+                answer = composed
+                final_answer_source = 'evidence_fallback'
+            elif intent == 'document_request' and documents:
+                answer = 'Найдены документы: ' + '; '.join([f"{d['title']} ({d['public_url']})" for d in documents[:5]])
+                final_answer_source = 'document_fallback'
+            elif sku_result:
                 answer = f"Артикул {sku_result.article}: {sku_result.product}, бренд {sku_result.brand}, категория {sku_result.category}."
-            elif documents:
-                answer = 'LLM временно недоступна. Найдены документы: ' + '; '.join([d['title'] for d in documents])
+                final_answer_source = 'sku_fallback'
             else:
                 answer = build_no_context_fallback(intent)
+                final_answer_source = 'fallback'
+                tools_called.append('fallback')
 
         if answer_style == 'short' and answer:
             parts = re.split(r'(?<=[.!?])\s+', answer.strip())
@@ -803,6 +725,11 @@ class AnswerService:
             web_results=web_results,
             tools_called=tools_called,
             empty_results=empty_results,
+            slots=slots,
+            intent=intent,
+            product_evidence=product_evidence.model_dump(),
+            final_answer_source=final_answer_source,
+            deterministic_reason=deterministic_reason or product_evidence.deterministic_reason,
         )
         response = {
             'session_id': sid,
@@ -881,6 +808,11 @@ class AnswerService:
         web_results: list,
         tools_called: list[str],
         empty_results: list[str],
+        slots,
+        intent: str,
+        product_evidence: dict,
+        final_answer_source: str,
+        deterministic_reason: str | None,
     ) -> list[dict]:
         trace: list[dict] = []
 
@@ -982,5 +914,37 @@ class AnswerService:
                 meta={'tool': 'fallback', 'empty_tools': empty_results},
                 mode='no_context',
             ))
+
+        if 'llm' in tools_called:
+            trace.append(build_tool_payload(
+                query=query,
+                results=[{
+                    'used_rag_chunks': len(rag_results[:5]),
+                    'used_documents': len(documents[:5]),
+                    'used_web_results': len(web_results[:5]),
+                }],
+                meta={'tool': 'llm_composer', 'final_answer_source': final_answer_source},
+                mode='composer',
+            ))
+
+        trace.append(build_tool_payload(
+            query=query,
+            results=[{
+                'intent': intent,
+                'article': article or '',
+                'product_type': slots.item_type,
+                'requested_size': getattr(slots, 'requested_size', ''),
+                'requested_pipe_size': getattr(slots, 'requested_pipe_size', ''),
+                'decision': product_evidence.get('decision', ''),
+                'decision_reason': product_evidence.get('decision_reason', ''),
+                'recommended_articles': product_evidence.get('recommended_articles', []),
+            }],
+            meta={
+                'tool': 'product_reasoner',
+                'final_answer_source': final_answer_source,
+                'deterministic_reason': deterministic_reason or '',
+            },
+            mode='evidence',
+        ))
 
         return trace

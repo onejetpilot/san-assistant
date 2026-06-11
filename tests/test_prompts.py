@@ -44,6 +44,7 @@ def test_build_user_prompt_formats_context_without_raw_python_repr():
     assert 'Классификация запроса:' in prompt
     assert '- intent: document_request' in prompt
     assert '- Артикул: OXF01612' in prompt
+    assert 'PRODUCT_EVIDENCE:' in prompt
     assert '1. user: Что за OXF01612?' in prompt
     assert 'Паспорт ONDO (passport)' in prompt
     assert 'https://example.test/passport.pdf' in prompt
@@ -63,5 +64,6 @@ def test_build_user_prompt_uses_explicit_empty_markers():
     assert 'NO_HISTORY' in prompt
     assert 'NO_STATE' in prompt
     assert 'NO_SKU' in prompt
+    assert 'NO_PRODUCT_EVIDENCE' in prompt
     assert 'NO_CONTEXT' in prompt
     assert 'NO_DOCUMENTS' in prompt

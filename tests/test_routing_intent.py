@@ -30,16 +30,38 @@ def test_article_lookup_by_number():
 
 def test_composition_question_with_article_uses_kit_lookup():
     d = _route('Из чего состоит комплект OXF01612K10G?')
-    assert d.intent == 'article_lookup'
+    assert d.intent == 'kit_composition_question'
     assert 'sku_lookup' in d.tools_to_call
     assert 'kit_lookup' in d.tools_to_call
 
 
 def test_dimension_question_with_article_uses_sku_lookup():
     d = _route('Какая длина OXS00016?')
-    assert d.intent == 'knowledge_base_question'
+    assert d.intent == 'technical_spec_question'
     assert 'sku_lookup' in d.tools_to_call
     assert 'rag_search' in d.tools_to_call
+
+
+def test_compatibility_question_detected_before_article_lookup():
+    d = _route('Подойдет ли уголок OXL01616 под трубу 20х2.8?')
+    assert d.intent == 'compatibility_question'
+    assert 'sku_lookup' in d.tools_to_call
+
+
+def test_related_product_question_detected():
+    d = _route('Какая гильза нужна к тройнику OXT02020?')
+    assert d.intent == 'related_product_question'
+    assert 'sku_lookup' in d.tools_to_call
+
+
+def test_assortment_question_detected():
+    d = _route('Есть ли уголки и тройники на 14 мм?')
+    assert d.intent == 'assortment_question'
+
+
+def test_installation_question_detected_for_hidden_install():
+    d = _route('Можно ли замонолитить эти фитинги в стяжку?')
+    assert d.intent == 'installation_or_usage_question'
 
 
 def test_price_question():

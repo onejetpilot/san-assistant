@@ -23,9 +23,12 @@ DOCUMENT_MARKERS = [
     'паспорт', 'инструкц', 'сертификат', 'pdf', 'документ',
     'скачать', 'технический паспорт', 'паспорт на',
 ]
-INSTALLATION_MARKERS = ['монтаж', 'установк', 'подключ', 'эксплуатац', 'как правильно установ']
+INSTALLATION_MARKERS = ['монтаж', 'установк', 'подключ', 'эксплуатац', 'как правильно установ', 'стяжк', 'в стену', 'замонолит', 'скрытый монтаж', 'бетон']
 WARRANTY_MARKERS = ['гарант']
 COMPARISON_MARKERS = ['сравни', 'сравнение', 'чем отличается', 'отличается от', 'разница между']
+RELATED_PRODUCT_MARKERS = ['какая гильза', 'что нужно к', 'какие комплектующие', 'чем обжать']
+ASSORTMENT_MARKERS = ['есть ли 14', 'бывают ли 14', 'есть размер 14', 'бывают ли 16', 'есть ли 16', 'есть ли 20', 'бывают ли 20']
+TECHNICAL_SPEC_MARKERS = ['какой вес', 'какая длина', 'какое давление', 'какая резьба', 'производитель', 'кто производит', 'марка латуни', 'шаг резьбы']
 SELECTION_MARKERS = [
     'подбери', 'выбери', 'выбрать', 'есть ли у вас',
     'есть ли', 'найди товар', 'найди кран', 'найди насос', 'найди фильтр',
@@ -66,6 +69,10 @@ def _find_article_token(query: str) -> str | None:
 
 def _is_technical_spec_question(ctx: RoutingContext) -> bool:
     q = ctx.normalized_query
+    if 'как подобрать' in q and not ctx.article:
+        return False
+    if ctx.slots.asks_technical_spec or ctx.slots.intent_hint == 'technical_spec':
+        return True
     if ctx.slots.asks_compatibility or ctx.slots.intent_hint == 'compatibility':
         return True
     if ctx.slots.dimension_name and any(w in q for w in ['какая', 'какой', 'какие', 'сколько', '?']):
@@ -131,11 +138,23 @@ def classify_intent(ctx: RoutingContext) -> tuple[str, float, str]:
     ):
         return 'follow_up', 0.82, 'follow_up_compatibility'
 
+    if any(m in q for m in INSTALLATION_MARKERS) or ctx.slots.asks_installation:
+        return 'installation_or_usage_question', 0.9, 'installation_marker'
+
+    if any(m in q for m in RELATED_PRODUCT_MARKERS) or ctx.slots.asks_related_product:
+        return 'related_product_question', 0.9, 'related_product_marker'
+
+    if any(m in q for m in ASSORTMENT_MARKERS) or ctx.slots.asks_assortment:
+        return 'assortment_question', 0.88, 'assortment_marker'
+
     if any(m in q for m in PRICE_MARKERS):
         return 'price_or_availability_question', 0.88, 'price_marker'
 
     if any(m in q for m in WARRANTY_MARKERS) or ctx.slots.asks_warranty:
         return 'warranty_question', 0.86, 'warranty_marker'
+
+    if ctx.slots.asks_composition:
+        return 'kit_composition_question', 0.9, 'kit_composition_marker'
 
     asks_doc_file = (
         any(m in q for m in DOCUMENT_MARKERS)
@@ -144,19 +163,20 @@ def classify_intent(ctx: RoutingContext) -> tuple[str, float, str]:
     if asks_doc_file:
         return 'document_request', 0.92, 'document_marker'
 
+    if any(m in q for m in TECHNICAL_SPEC_MARKERS):
+        return 'technical_spec_question', 0.89, 'technical_spec_marker'
+
+    if ctx.slots.asks_compatibility or ctx.slots.intent_hint == 'compatibility':
+        return 'compatibility_question', 0.9, 'compatibility_marker'
+
     if _is_technical_spec_question(ctx):
-        return 'knowledge_base_question', 0.87, 'technical_spec_question'
+        return 'technical_spec_question', 0.87, 'technical_spec_question'
 
     if any(m in q for m in KNOWLEDGE_MARKERS) or ctx.slots.asks_limitations:
         return 'knowledge_base_question', 0.78, 'knowledge_base_marker'
 
-    if any(m in q for m in INSTALLATION_MARKERS) or ctx.slots.asks_installation:
-        return 'installation_or_usage_question', 0.86, 'installation_marker'
-
     article = ctx.article or _find_article_token(ctx.resolved_query)
     if article:
-        if ctx.slots.asks_composition:
-            return 'article_lookup', 0.9, 'composition_with_article'
         if any(m in q for m in ['артикул', 'что за', 'что такое']):
             return 'article_lookup', 0.93, 'explicit_article_lookup'
         if 'найди' in q and ('артикул' in q or _find_article_token(ctx.original_query.lower())):

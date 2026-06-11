@@ -69,12 +69,17 @@ def test_ambiguous_asks_clarification(service):
 
 
 def test_article_lookup_uses_sku_not_llm(service):
+    async def _llm(*args, **kwargs):
+        return 'Это товар ONDO с артикулом OXF01612.'
+
+    service.llm.chat = _llm
     resp = asyncio.run(service.answer('Что за OXF01612?', answer_style='short'))
     assert 'OXF01612' in resp['answer']
     assert 'sku_lookup' in resp['tools_used']
     assert resp['retrieval_trace'][0]['meta']['tool'] == 'sku_lookup'
     assert resp['retrieval_trace'][0]['status'] == 'ok'
-    assert 'LLM_SHOULD_NOT_BE_CALLED' not in resp['answer']
+    assert 'llm' in resp['tools_used']
+    assert any(item['meta'].get('tool') == 'llm_composer' for item in resp['retrieval_trace'])
 
 
 def test_article_lookup_ignores_dirty_kit_components(service):
@@ -90,37 +95,38 @@ def test_article_lookup_ignores_dirty_kit_components(service):
         }
     })
 
+    async def _llm(*args, **kwargs):
+        return 'Это товар OXF01612 без подтвержденного состава комплекта.'
+
+    service.llm.chat = _llm
     resp = asyncio.run(service.answer('Что за OXF01612?', answer_style='short'))
 
     assert row is not None
-    assert 'Артикул OXF01612' in resp['answer']
+    assert 'OXF01612' in resp['answer']
     assert 'Состав комплекта' not in resp['answer']
 
 
-def test_document_request_without_documents_does_not_call_llm(service):
-    async def _llm_forbidden(*args, **kwargs):
-        raise AssertionError('document miss should use fallback, not LLM')
+def test_document_request_without_documents_still_calls_llm(service):
+    async def _llm(*args, **kwargs):
+        return 'Не нашёл подтверждённых документов. Уточните артикул или тип документа.'
 
-    service.llm.chat = _llm_forbidden
-
+    service.llm.chat = _llm
     resp = asyncio.run(service.answer('Дай паспорт на OXF01612', answer_style='short'))
 
     assert resp['answer_mode'] == 'document_answer'
-    assert 'документ' in resp['answer'].lower()
-    assert 'fallback' in resp['tools_used']
-    assert 'llm' not in resp['tools_used']
-    assert any(item['meta'].get('tool') == 'fallback' for item in resp['retrieval_trace'])
+    assert 'документ' in resp['answer'].lower() or 'уточните' in resp['answer'].lower()
+    assert 'llm' in resp['tools_used']
+    assert any(item['meta'].get('tool') == 'llm_composer' for item in resp['retrieval_trace'])
 
 
-def test_no_rag_context_fallback(service):
-    async def _no_llm(*a, **k):
-        raise AssertionError('LLM must not be called without RAG context')
+def test_no_rag_context_still_uses_llm(service):
+    async def _llm(*a, **k):
+        return 'Не нашёл подтверждённых данных. Уточните товар или параметр.'
 
-    service.llm.chat = _no_llm
+    service.llm.chat = _llm
     resp = asyncio.run(service.answer('Почему падает давление в системе отопления?'))
-    assert 'базе знаний' in resp['answer'].lower()
-    assert 'fallback' in resp['tools_used']
-    assert 'llm' not in resp['tools_used']
+    assert 'уточните' in resp['answer'].lower() or 'не нашёл' in resp['answer'].lower()
+    assert 'llm' in resp['tools_used']
 
 
 def test_rag_strong_context_threshold():

@@ -94,6 +94,30 @@ def _format_web_results(results: list[dict]) -> str:
     return '\n'.join(lines)
 
 
+def _format_product_evidence(evidence: dict | None) -> str:
+    if not evidence:
+        return 'NO_PRODUCT_EVIDENCE'
+    lines = []
+    for key in [
+        'intent',
+        'user_requested_product_type',
+        'user_requested_size',
+        'user_requested_pipe_size',
+        'user_requested_dimension',
+        'decision',
+        'decision_reason',
+        'final_answer_strategy',
+    ]:
+        value = evidence.get(key)
+        if value:
+            lines.append(f"- {key}: {value}")
+    for key in ['mentioned_articles', 'recommended_articles', 'missing_facts', 'warnings', 'answer_hints']:
+        values = evidence.get(key) or []
+        if values:
+            lines.append(f"- {key}: {', '.join(map(str, values[:5]))}")
+    return '\n'.join(lines) if lines else 'NO_PRODUCT_EVIDENCE'
+
+
 def build_user_prompt(payload: dict) -> str:
     rag_chunks = payload.get('rag_chunks') or []
     rag_block = '\n\n--- RAG CHUNK ---\n\n'.join(str(chunk).strip() for chunk in rag_chunks if str(chunk).strip()) or 'NO_CONTEXT'
@@ -107,12 +131,21 @@ def build_user_prompt(payload: dict) -> str:
         f"Состояние диалога:\n{_format_state(payload.get('conversation_state') or {})}\n\n"
         f"Краткая история:\n{_format_history(payload.get('recent_messages') or [])}\n\n"
         f"Точное совпадение SKU:\n{_format_sku(payload.get('sku_result'))}\n\n"
+        f"PRODUCT_EVIDENCE:\n{_format_product_evidence(payload.get('product_evidence'))}\n\n"
         f"RAG-контекст для фактов:\n{rag_block}\n"
         f"\nДокументы:\n{_format_documents(payload.get('document_results') or [])}\n\n"
         f"Web результаты:\n{_format_web_results(payload.get('web_results') or [])}\n\n"
         "Инструкция для ответа:\n"
+        "- Ты всегда формируешь финальный ответ пользователю на основе PRODUCT_EVIDENCE, SKU, RAG, Documents и Web.\n"
+        "- Детерминированные данные являются источниками фактов, но не готовым ответом.\n"
+        "- Отвечай как консультант маркетплейса: сначала прямой вывод Да / Нет / Не подтверждено / В базе не указано.\n"
+        "- Затем дай 1-3 коротких пояснения по PRODUCT_EVIDENCE, SKU, RAG, Documents или Web.\n"
+        "- Если есть подходящий артикул, укажи его.\n"
+        "- Не превращай ответ в длинный список артикулов, если пользователь не просил список.\n"
+        "- Не возвращай сырую карточку товара, если пользователь не просил именно карточку товара.\n"
+        "- Не возвращай список артикулов, если пользователь спрашивает совместимость, применение или подбор.\n"
         "- Не делай фактических выводов вне SKU/RAG/Documents/Web.\n"
-        "- Если контекста нет или он не отвечает на вопрос, не придумывай ответ и предложи уточнить артикул, бренд или параметр.\n"
+        "- Если данных нет или они не подтверждены, скажи конкретно, чего именно не хватает.\n"
         "- Если найден документ, дай название и ссылку.\n"
         "- Не упоминай роутинг, инструменты, confidence и внутреннее устройство бота."
     )

@@ -22,8 +22,8 @@ class QueryRouter:
         prompt = (
             'Return JSON only: '
             '{"intent":"...","tools":["rag_search"],"confidence":0.0,"reason":"..."}. '
-            'Allowed intents: product_question, article_lookup, document_request, '
-            'knowledge_base_question, installation_or_usage_question, warranty_question, '
+            'Allowed intents: product_question, article_lookup, kit_composition_question, document_request, '
+            'knowledge_base_question, compatibility_question, related_product_question, assortment_question, technical_spec_question, installation_or_usage_question, warranty_question, '
             'comparison_question, price_or_availability_question, web_search_needed, '
             'ambiguous_question, out_of_scope, follow_up. '
             'Allowed tools: sku_lookup, kit_lookup, rag_search, document_search, san_team_search, clarify, refuse. '
