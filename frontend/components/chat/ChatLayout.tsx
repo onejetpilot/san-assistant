@@ -1,9 +1,9 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { chat, chatStream, clearAccessToken, ApiError } from '../../lib/api';
+import { chat, ApiError } from '../../lib/api';
 import { clearConversationId, getConversationId, getSessionId, setConversationId, setSessionId } from '../../lib/storage';
-import type { AnswerStyle, Message } from '../../lib/types';
+import type { Message } from '../../lib/types';
 import TokenGate from '../auth/TokenGate';
 import ChatInput from './ChatInput';
 import MessageBubble from './MessageBubble';
@@ -27,7 +27,6 @@ export default function ChatLayout() {
   const [loading, setLoading] = useState(false);
   const [sessionId, setLocalSessionId] = useState<string | null>(null);
   const [conversationId, setLocalConversationId] = useState<string | null>(null);
-  const [answerStyle, setAnswerStyle] = useState<AnswerStyle>('detailed');
   const [needsToken, setNeedsToken] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [followScroll, setFollowScroll] = useState(true);
@@ -46,101 +45,40 @@ export default function ChatLayout() {
 
   const inputLength = useMemo(() => input.length, [input]);
 
-  const updateLastAssistant = (updater: (message: Message) => Message) => {
-    setMessages((prev) => {
-      const next = [...prev];
-      for (let idx = next.length - 1; idx >= 0; idx -= 1) {
-        if (next[idx]?.role === 'assistant') {
-          next[idx] = updater({ ...next[idx] });
-          break;
-        }
-      }
-      return next;
-    });
-  };
-
   const onSend = async () => {
     const text = input.trim();
     if (!text || loading) return;
 
     setError(null);
     setLoading(true);
-    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '' }]);
+    setMessages((prev) => [...prev, { role: 'user', content: text }]);
     setInput('');
 
     try {
-      let streamStarted = false;
-      let streamReceivedText = false;
-
-      try {
-        await chatStream(
-          { session_id: sessionId, conversation_id: conversationId, message: text, answer_style: answerStyle },
-          (meta) => {
-            streamStarted = true;
-            if (meta.session_id) {
-              setSessionId(meta.session_id);
-              setLocalSessionId(meta.session_id);
-            }
-            if (meta.conversation_id) {
-              setConversationId(meta.conversation_id);
-              setLocalConversationId(meta.conversation_id);
-            }
-            if (meta.request_id) {
-              updateLastAssistant((last) => ({ ...last, request_id: meta.request_id }));
-            }
-          },
-          (delta) => {
-            streamReceivedText = true;
-            updateLastAssistant((last) => ({ ...last, content: `${last.content}${delta}` }));
-          },
-          (final) => {
-            if (final.session_id) {
-              setSessionId(final.session_id);
-              setLocalSessionId(final.session_id);
-            }
-            if (final.conversation_id) {
-              setConversationId(final.conversation_id);
-              setLocalConversationId(final.conversation_id);
-            }
-            updateLastAssistant((last) => ({
-              ...last,
-              content: final.answer ?? last.content,
-              request_id: final.request_id ?? last.request_id,
-              confidence: final.confidence ?? last.confidence,
-              answer_mode: final.answer_mode ?? last.answer_mode,
-            }));
-          },
-          (message) => {
-            throw new Error(message);
-          },
-        );
-      } catch (streamError) {
-        if (!streamStarted && !streamReceivedText) {
-          const res = await chat({ session_id: sessionId, conversation_id: conversationId, message: text, answer_style: answerStyle });
-          if (res.session_id) {
-            setSessionId(res.session_id);
-            setLocalSessionId(res.session_id);
-          }
-          if (res.conversation_id) {
-            setConversationId(res.conversation_id);
-            setLocalConversationId(res.conversation_id);
-          }
-          updateLastAssistant(() => ({
-            role: 'assistant',
-            content: res.answer,
-            request_id: res.request_id,
-            sources: res.sources,
-            documents: res.documents,
-            web_results: res.web_results,
-            confidence: res.confidence,
-            used_web_search: res.used_web_search,
-            tools_used: res.tools_used,
-            answer_mode: res.answer_mode,
-          }));
-        } else {
-          throw streamError;
-        }
+      const res = await chat({ session_id: sessionId, conversation_id: conversationId, message: text, answer_style: 'detailed' });
+      if (res.session_id) {
+        setSessionId(res.session_id);
+        setLocalSessionId(res.session_id);
       }
+      if (res.conversation_id) {
+        setConversationId(res.conversation_id);
+        setLocalConversationId(res.conversation_id);
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          content: res.answer,
+          request_id: res.request_id,
+          sources: res.sources,
+          documents: res.documents,
+          web_results: res.web_results,
+          confidence: res.confidence,
+          used_web_search: res.used_web_search,
+          tools_used: res.tools_used,
+          answer_mode: res.answer_mode,
+        },
+      ]);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         setNeedsToken(true);
@@ -195,21 +133,6 @@ export default function ChatLayout() {
               >
                 Новый чат
               </button>
-              <button
-                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-left text-sm hover:bg-slate-800"
-                onClick={() => setNeedsToken(true)}
-              >
-                Сменить токен
-              </button>
-              <button
-                className="rounded-lg border border-rose-800 bg-rose-950/40 px-3 py-2 text-left text-sm text-rose-100 hover:bg-rose-900/40"
-                onClick={() => {
-                  clearAccessToken();
-                  setNeedsToken(true);
-                }}
-              >
-                Выйти
-              </button>
             </div>
           </aside>
 
@@ -248,7 +171,7 @@ export default function ChatLayout() {
                   </div>
                 </div>
               ))}
-              {loading && messages[messages.length - 1]?.role === 'assistant' && !messages[messages.length - 1]?.content && (
+              {loading && (
                 <div className="flex justify-start">
                   <div className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-600">
                     <span>SAN Assistant печатает</span>
@@ -270,8 +193,6 @@ export default function ChatLayout() {
                 setValue={setInput}
                 loading={loading}
                 onSend={onSend}
-                answerStyle={answerStyle}
-                setAnswerStyle={setAnswerStyle}
               />
               <div className="mt-2 flex items-center justify-between text-xs text-slate-500">
                 <span>Ответы только по сантехническим товарам</span>

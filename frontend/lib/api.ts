@@ -1,4 +1,4 @@
-import type { AdminStatusResponse, ChatRequest, ChatResponse, FeedbackRequest, StreamDonePayload } from './types';
+import type { AdminStatusResponse, ChatRequest, ChatResponse, FeedbackRequest } from './types';
 import { getAccessToken, setAccessToken, clearAccessToken } from './storage';
 import { safeJson } from './utils';
 
@@ -70,102 +70,6 @@ export async function chat(payload: ChatRequest): Promise<ChatResponse> {
     headers: headers(),
     body: JSON.stringify(payload),
   });
-}
-
-function parseSseBlock(block: string): { event: string; data: string } | null {
-  const lines = block.replace(/\r/g, '').split('\n');
-  let event = 'message';
-  const dataLines: string[] = [];
-
-  for (const line of lines) {
-    if (line.startsWith('event:')) {
-      event = line.slice(6).trim();
-    } else if (line.startsWith('data:')) {
-      dataLines.push(line.slice(5).trim());
-    }
-  }
-
-  if (!dataLines.length) return null;
-  return { event, data: dataLines.join('\n') };
-}
-
-export async function chatStream(
-  payload: ChatRequest,
-  onMeta: (meta: Partial<ChatResponse>) => void,
-  onDelta: (text: string) => void,
-  onDone: (final: Partial<StreamDonePayload>) => void,
-  onError: (message: string) => void,
-): Promise<void> {
-  let lastError: Error | null = null;
-  const bases = candidateBases();
-
-  for (const base of bases) {
-    const url = `${base}/api/chat/stream`;
-    try {
-      const resp = await fetch(url, {
-        method: 'POST',
-        headers: headers(),
-        body: JSON.stringify(payload),
-      });
-      if (resp.status === 401) {
-        throw new ApiError('Требуется access token', 401);
-      }
-      if (!resp.ok) {
-        throw new ApiError(`Ошибка API: HTTP ${resp.status}`, resp.status);
-      }
-      if (!resp.body) {
-        throw new ApiError('Streaming не поддерживается backend ответом', 500);
-      }
-
-      const reader = resp.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      const flushBlock = (rawBlock: string) => {
-        const parsed = parseSseBlock(rawBlock);
-        if (!parsed) return;
-        let payloadData: Record<string, unknown> = {};
-        try {
-          payloadData = JSON.parse(parsed.data);
-        } catch {
-          payloadData = {};
-        }
-
-        if (parsed.event === 'meta') {
-          onMeta(payloadData as Partial<ChatResponse>);
-        } else if (parsed.event === 'delta') {
-          onDelta(String(payloadData.text || ''));
-        } else if (parsed.event === 'done') {
-          onDone(payloadData as Partial<StreamDonePayload>);
-        } else if (parsed.event === 'error') {
-          onError(String(payloadData.message || 'Не удалось обработать сообщение.'));
-        }
-      };
-
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buffer += decoder.decode(value, { stream: true });
-        let sep = buffer.indexOf('\n\n');
-        while (sep !== -1) {
-          const block = buffer.slice(0, sep);
-          buffer = buffer.slice(sep + 2);
-          flushBlock(block);
-          sep = buffer.indexOf('\n\n');
-        }
-      }
-
-      buffer += decoder.decode();
-      if (buffer.trim()) {
-        flushBlock(buffer.trim());
-      }
-      return;
-    } catch (e) {
-      lastError = e instanceof Error ? e : new Error('Network error');
-    }
-  }
-
-  throw lastError ?? new Error('Не удалось обратиться к API');
 }
 
 export async function sendFeedback(payload: FeedbackRequest): Promise<{ status: string }> {

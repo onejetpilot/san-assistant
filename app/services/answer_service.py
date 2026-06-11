@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.core.config import settings
@@ -47,34 +46,6 @@ FOLLOW_UP_MARKERS = [
     'такие',
 ]
 logger = get_logger('answer_service')
-
-
-@dataclass
-class AnswerContext:
-    started: int
-    sid: str
-    cid: str
-    request_id: str
-    original_query: str
-    resolved_query: str
-    intent: str
-    depends_on_history: bool
-    lookup_article: str | None
-    technical_article: str | None
-    pack_article: str | None
-    matched_sku: SkuRecord | None
-    pack_sku: SkuRecord | None
-    kit_result: KitRecord | None
-    display_rag: list[RetrievedChunk]
-    documents: list[dict]
-    sources: list[dict]
-    confidence: dict
-    answer_mode: str
-    route: dict
-    tools_called: list[str] = field(default_factory=list)
-    empty_results: list[str] = field(default_factory=list)
-    prompt: str | None = None
-    immediate_answer: str | None = None
 
 
 class AnswerService:
@@ -276,7 +247,7 @@ class AnswerService:
             lines.extend([f'- {item}' for item in described_components])
         return '\n'.join(lines)
 
-    def _apply_answer_style(self, answer: str, answer_style: str) -> str:
+    def _finalize_answer(self, answer: str, answer_style: str) -> str:
         if answer_style == 'short' and answer:
             parts = re.split(r'(?<=[.!?])\s+', answer.strip())
             return ' '.join(parts[:6])
@@ -324,13 +295,13 @@ class AnswerService:
             'route': route,
         }
 
-    async def _prepare_answer_context(
+    async def answer(
         self,
         query: str,
         session_id: str | None = None,
         answer_style: str = 'detailed',
         conversation_id: str | None = None,
-    ) -> AnswerContext:
+    ) -> dict:
         started = now_ms()
         request_id = gen_request_id()
         resolved_query = query.strip()
@@ -359,23 +330,59 @@ class AnswerService:
             'tools': ['sku_lookup', 'rag_search', 'llm'],
         }
 
-        answer_mode = 'document_answer' if intent == 'document_request' else 'product_qa'
-        immediate_answer = None
+        if intent == 'clarify':
+            answer = 'Не совсем понял запрос. Уточните, пожалуйста, товар, артикул или параметр.'
+            payload = self._base_response(
+                session_id=sid,
+                conversation_id=cid,
+                request_id=request_id,
+                answer=answer,
+                original_query=query,
+                resolved_query=resolved_query,
+                answer_mode='clarify',
+                confidence='low',
+                tools_used=['clarify'],
+                route=route,
+            )
+            self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'clarify', 'answer_mode': 'clarify'})
+            return payload
+
+        if intent == 'smalltalk':
+            answer = self._smalltalk_answer(query)
+            payload = self._base_response(
+                session_id=sid,
+                conversation_id=cid,
+                request_id=request_id,
+                answer=answer,
+                original_query=query,
+                resolved_query=resolved_query,
+                answer_mode='short_answer',
+                confidence='high',
+                tools_used=['smalltalk'],
+                route=route,
+            )
+            self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': 'short_answer'})
+            return payload
+
+        if intent == 'out_of_scope':
+            answer = 'Я консультирую только по сантехническим товарам и связанной документации.'
+            payload = self._base_response(
+                session_id=sid,
+                conversation_id=cid,
+                request_id=request_id,
+                answer=answer,
+                original_query=query,
+                resolved_query=resolved_query,
+                answer_mode='not_enough_data',
+                confidence='high',
+                tools_used=['refuse'],
+                route=route,
+            )
+            self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': 'not_enough_data'})
+            return payload
+
         tools_called: list[str] = []
         empty_results: list[str] = []
-
-        if intent == 'clarify':
-            immediate_answer = 'Не совсем понял запрос. Уточните, пожалуйста, товар, артикул или параметр.'
-            answer_mode = 'clarify'
-            tools_called = ['clarify']
-        elif intent == 'smalltalk':
-            immediate_answer = self._smalltalk_answer(query)
-            answer_mode = 'short_answer'
-            tools_called = ['smalltalk']
-        elif intent == 'out_of_scope':
-            immediate_answer = 'Я консультирую только по сантехническим товарам и связанной документации.'
-            answer_mode = 'not_enough_data'
-            tools_called = ['refuse']
 
         sku_context = {
             'original_article': lookup_article,
@@ -384,7 +391,7 @@ class AnswerService:
             'pack_sku': None,
             'used_base_from_pack': False,
         }
-        if lookup_article and not immediate_answer:
+        if lookup_article:
             tools_called.append('sku_lookup')
             if requested_article:
                 sku_context = self._resolve_sku_context(lookup_article, normalized_sku)
@@ -404,309 +411,195 @@ class AnswerService:
         pack_sku = sku_context['pack_sku']
 
         kit_result = None
-        if intent == 'kit_composition_question' and lookup_article and not immediate_answer:
+        if intent == 'kit_composition_question' and lookup_article:
             tools_called.append('kit_lookup')
             base_article = normalized_sku.base_article if requested_article else technical_article
             kit_result = self.kits.lookup(lookup_article) or self.kits.lookup(base_article)
             if not kit_result:
                 empty_results.append('kit_lookup')
 
-        display_rag: list[RetrievedChunk] = []
-        documents: list[dict] = []
-        sources: list[dict] = []
-        confidence = {'label': 'high', 'reason': 'immediate_answer'}
-        prompt = None
-
-        if not immediate_answer:
-            tools_called.append('rag_search')
-            rag_query = resolved_query
-            if technical_article and technical_article not in rag_query:
-                rag_query = f'{rag_query} {technical_article}'
-            rag_results = self._collect_relevant_context(
-                query=rag_query,
-                requested_article=technical_article,
-                matched_sku=matched_sku,
-            )
-            if not rag_results:
-                empty_results.append('rag_search')
-            display_rag = filter_relevant_chunks(rag_results) or rag_results
-
-            documents_raw = []
-            if intent == 'document_request':
-                tools_called.append('document_search')
-                documents_raw = self.docs.search(
-                    rag_query,
-                    article=technical_article or normalized_sku.base_article,
-                    doc_type=self._extract_doc_type(resolved_query),
-                )
-                if not documents_raw:
-                    empty_results.append('document_search')
-            documents = [
-                {
-                    'title': doc['title'],
-                    'type': doc['type'],
-                    'product': doc['product'],
-                    'brand': doc['brand'],
-                    'public_url': doc['public_url'],
-                }
-                for doc in documents_raw
-            ]
-            sources = [
-                {
-                    'doc_id': chunk.metadata.get('doc_id', ''),
-                    'product': chunk.metadata.get('product', ''),
-                    'brand': chunk.metadata.get('brand', ''),
-                    'category': chunk.metadata.get('category', ''),
-                    'section': chunk.metadata.get('section', ''),
-                    'source_file': chunk.metadata.get('source_file', ''),
-                    'score': chunk.score,
-                }
-                for chunk in display_rag[:5]
-            ]
-            confidence = compute_confidence(
-                bool(matched_sku or kit_result),
-                [item.score for item in display_rag],
-                bool(documents),
-            )
-
-            if intent == 'kit_composition_question' and kit_result:
-                immediate_answer = self._format_kit_answer(kit_result, matched_sku)
-            elif intent == 'document_request' and documents:
-                immediate_answer = self._build_documents_answer(documents)
-            elif not (matched_sku or display_rag or documents):
-                immediate_answer = 'В базе знаний и документации нет данных по этому запросу.'
-            else:
-                prompt = build_user_prompt({
-                    'original_query': query,
-                    'requested_article': lookup_article,
-                    'technical_article': technical_article,
-                    'pack_article': pack_sku.article if pack_sku else (lookup_article if sku_context['used_base_from_pack'] else None),
-                    'matched_article': matched_sku.article if matched_sku else (technical_article or lookup_article),
-                    'sku_result': matched_sku.model_dump() if matched_sku else None,
-                    'rag_chunks': [self._sanitize_context(chunk.text) for chunk in display_rag[:8]],
-                    'document_results': documents,
-                })
-
-        return AnswerContext(
-            started=started,
-            sid=sid,
-            cid=cid,
-            request_id=request_id,
-            original_query=query,
-            resolved_query=resolved_query,
-            intent=intent,
-            depends_on_history=depends_on_history,
-            lookup_article=lookup_article,
-            technical_article=technical_article,
-            pack_article=pack_sku.article if pack_sku else (lookup_article if sku_context['used_base_from_pack'] else None),
+        tools_called.append('rag_search')
+        rag_query = resolved_query
+        if technical_article and technical_article not in rag_query:
+            rag_query = f'{rag_query} {technical_article}'
+        rag_results = self._collect_relevant_context(
+            query=rag_query,
+            requested_article=technical_article,
             matched_sku=matched_sku,
-            pack_sku=pack_sku,
-            kit_result=kit_result,
-            display_rag=display_rag,
-            documents=documents,
-            sources=sources,
-            confidence=confidence,
-            answer_mode=answer_mode,
-            route=route,
-            tools_called=tools_called,
-            empty_results=empty_results,
-            prompt=prompt,
-            immediate_answer=immediate_answer,
         )
+        if not rag_results:
+            empty_results.append('rag_search')
+        display_rag = filter_relevant_chunks(rag_results) or rag_results
 
-    async def _finalize_answer(self, context: AnswerContext, answer: str, answer_style: str, final_answer_source: str) -> dict:
-        answer = self._apply_answer_style(answer, answer_style)
+        documents_raw = []
+        if intent == 'document_request':
+            tools_called.append('document_search')
+            documents_raw = self.docs.search(
+                rag_query,
+                article=technical_article or normalized_sku.base_article,
+                doc_type=self._extract_doc_type(resolved_query),
+            )
+            if not documents_raw:
+                empty_results.append('document_search')
+        documents = [
+            {
+                'title': doc['title'],
+                'type': doc['type'],
+                'product': doc['product'],
+                'brand': doc['brand'],
+                'public_url': doc['public_url'],
+            }
+            for doc in documents_raw
+        ]
+        sources = [
+            {
+                'doc_id': chunk.metadata.get('doc_id', ''),
+                'product': chunk.metadata.get('product', ''),
+                'brand': chunk.metadata.get('brand', ''),
+                'category': chunk.metadata.get('category', ''),
+                'section': chunk.metadata.get('section', ''),
+                'source_file': chunk.metadata.get('source_file', ''),
+                'score': chunk.score,
+            }
+            for chunk in display_rag[:5]
+        ]
 
-        if context.confidence['label'] == 'low' or not (context.sources or context.documents or context.matched_sku or context.kit_result):
+        confidence = compute_confidence(
+            bool(matched_sku or kit_result),
+            [item.score for item in display_rag],
+            bool(documents),
+        )
+        answer_mode = 'document_answer' if intent == 'document_request' else 'product_qa'
+        final_answer_source = 'no_context'
+
+        if intent == 'kit_composition_question' and kit_result:
+            answer = self._format_kit_answer(kit_result, matched_sku)
+            final_answer_source = 'kit_lookup'
+        elif intent == 'document_request' and documents:
+            answer = self._build_documents_answer(documents)
+            final_answer_source = 'document_lookup'
+        elif not (matched_sku or display_rag or documents):
+            answer = 'В базе знаний и документации нет данных по этому запросу.'
+            final_answer_source = 'no_context'
+        else:
+            tools_called.append('llm')
+            prompt = build_user_prompt({
+                'original_query': query,
+                'requested_article': lookup_article,
+                'technical_article': technical_article,
+                'pack_article': pack_sku.article if pack_sku else (lookup_article if sku_context['used_base_from_pack'] else None),
+                'matched_article': matched_sku.article if matched_sku else (technical_article or lookup_article),
+                'sku_result': matched_sku.model_dump() if matched_sku else None,
+                'rag_chunks': [self._sanitize_context(chunk.text) for chunk in display_rag[:8]],
+                'document_results': documents,
+            })
+            self._log_prompt_preview(request_id, SYSTEM_PROMPT, prompt)
+            try:
+                answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
+                final_answer_source = 'llm'
+            except Exception:
+                if matched_sku and intent == 'article_lookup':
+                    answer = self._format_sku_answer(matched_sku)
+                    final_answer_source = 'sku_fallback'
+                elif documents:
+                    answer = self._build_documents_answer(documents)
+                    final_answer_source = 'document_fallback'
+                elif kit_result:
+                    answer = self._format_kit_answer(kit_result, matched_sku)
+                    final_answer_source = 'kit_fallback'
+                else:
+                    answer = 'В базе знаний и документации нет данных по этому запросу.'
+                    final_answer_source = 'no_context'
+
+        answer = self._finalize_answer(answer, answer_style)
+
+        if confidence['label'] == 'low' or not (sources or documents or matched_sku or kit_result):
             save_knowledge_gap(
-                request_id=context.request_id,
-                original_query=context.original_query,
-                resolved_query=context.resolved_query,
-                intent=context.intent,
-                tools_used=context.tools_called,
-                reason=context.confidence.get('reason', 'low_confidence_or_no_results'),
+                request_id=request_id,
+                original_query=query,
+                resolved_query=resolved_query,
+                intent=intent,
+                tools_used=tools_called,
+                reason=confidence.get('reason', 'low_confidence_or_no_results'),
             )
 
         versions = get_current_index_versions()
-        latency = now_ms() - context.started
+        latency = now_ms() - started
         retrieval_trace = self._build_retrieval_trace(
-            query=context.resolved_query,
-            article=context.technical_article or context.lookup_article,
-            sku_result=context.matched_sku,
-            kit_result=context.kit_result,
-            rag_results=context.display_rag,
-            documents=context.documents,
-            tools_called=context.tools_called,
-            empty_results=context.empty_results,
-            intent=context.intent,
+            query=resolved_query,
+            article=technical_article or lookup_article,
+            sku_result=matched_sku,
+            kit_result=kit_result,
+            rag_results=display_rag,
+            documents=documents,
+            tools_called=tools_called,
+            empty_results=empty_results,
+            intent=intent,
             final_answer_source=final_answer_source,
         )
         response = self._base_response(
-            session_id=context.sid,
-            conversation_id=context.cid,
-            request_id=context.request_id,
+            session_id=sid,
+            conversation_id=cid,
+            request_id=request_id,
             answer=answer,
-            original_query=context.original_query,
-            resolved_query=context.resolved_query,
-            depends_on_history=context.depends_on_history,
-            answer_mode=context.answer_mode,
-            sources=context.sources,
-            documents=context.documents,
-            confidence=context.confidence['label'],
-            tools_used=context.tools_called,
+            original_query=query,
+            resolved_query=resolved_query,
+            depends_on_history=depends_on_history,
+            answer_mode=answer_mode,
+            sources=sources,
+            documents=documents,
+            confidence=confidence['label'],
+            tools_used=tools_called,
             retrieval_trace=retrieval_trace,
-            route=context.route,
+            route=route,
         )
 
         save_chat_request(
-            request_id=context.request_id,
-            session_id=context.sid,
-            conversation_id=context.cid,
-            user_message=context.original_query,
+            request_id=request_id,
+            session_id=sid,
+            conversation_id=cid,
+            user_message=query,
             answer=answer,
-            intent=context.intent,
-            answer_mode=context.answer_mode,
+            intent=intent,
+            answer_mode=answer_mode,
             router_mode=settings.ROUTER_MODE,
-            tools_used_json=context.tools_called,
-            sources_json=context.sources,
-            documents_json=context.documents,
+            tools_used_json=tools_called,
+            sources_json=sources,
+            documents_json=documents,
             used_web_search=False,
-            confidence=context.confidence['label'],
+            confidence=confidence['label'],
             model_name=settings.LLM_MODEL,
             latency_ms=latency,
             rag_index_version=versions.get('rag_index_version'),
             documents_index_version=versions.get('documents_index_version'),
-            needs_human_review=(context.confidence['label'] == 'low'),
+            needs_human_review=(confidence['label'] == 'low'),
         )
 
-        current_product = context.matched_sku.product if context.matched_sku else (context.sources[0]['product'] if context.sources else None)
-        current_brand = context.matched_sku.brand if context.matched_sku else (context.sources[0]['brand'] if context.sources else None)
-        current_category = context.matched_sku.category if context.matched_sku else (context.sources[0]['category'] if context.sources else None)
-        current_article = context.technical_article or (context.matched_sku.article if context.matched_sku else context.lookup_article)
-        current_doc_id = context.sources[0]['doc_id'] if context.sources else None
+        current_product = matched_sku.product if matched_sku else (sources[0]['product'] if sources else None)
+        current_brand = matched_sku.brand if matched_sku else (sources[0]['brand'] if sources else None)
+        current_category = matched_sku.category if matched_sku else (sources[0]['category'] if sources else None)
+        current_article = technical_article or (matched_sku.article if matched_sku else lookup_article)
+        current_doc_id = sources[0]['doc_id'] if sources else None
 
         self.memory.update_state(
-            context.cid,
-            context.sid,
+            cid,
+            sid,
             current_product=current_product,
             current_brand=current_brand,
             current_article=current_article,
             current_category=current_category,
             current_doc_id=current_doc_id,
-            last_intent=context.intent,
-            last_answer_mode=context.answer_mode,
-            last_sources_json=context.sources,
-            last_documents_json=context.documents,
+            last_intent=intent,
+            last_answer_mode=answer_mode,
+            last_sources_json=sources,
+            last_documents_json=documents,
         )
-        self.memory.append_message(
-            context.sid,
-            context.cid,
-            role='assistant',
-            content=answer,
-            request_id=context.request_id,
-            metadata_json={'intent': context.intent, 'answer_mode': context.answer_mode},
-        )
+        self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': answer_mode})
 
         if settings.ENABLE_ANSWER_EVALUATION:
-            await evaluate_answer({'query': context.resolved_query, 'answer': answer, 'sources': context.sources})
+            await evaluate_answer({'query': resolved_query, 'answer': answer, 'sources': sources})
 
         return response
-
-    async def answer(
-        self,
-        query: str,
-        session_id: str | None = None,
-        answer_style: str = 'detailed',
-        conversation_id: str | None = None,
-    ) -> dict:
-        context = await self._prepare_answer_context(
-            query,
-            session_id=session_id,
-            answer_style=answer_style,
-            conversation_id=conversation_id,
-        )
-        if context.immediate_answer is not None:
-            return await self._finalize_answer(context, context.immediate_answer, answer_style, 'immediate')
-
-        assert context.prompt is not None
-        context.tools_called.append('llm')
-        self._log_prompt_preview(context.request_id, SYSTEM_PROMPT, context.prompt)
-        try:
-            answer = await self.llm.chat(SYSTEM_PROMPT, context.prompt)
-            final_answer_source = 'llm'
-        except Exception:
-            if context.matched_sku and context.intent == 'article_lookup':
-                answer = self._format_sku_answer(context.matched_sku)
-                final_answer_source = 'sku_fallback'
-            elif context.documents:
-                answer = self._build_documents_answer(context.documents)
-                final_answer_source = 'document_fallback'
-            elif context.kit_result:
-                answer = self._format_kit_answer(context.kit_result, context.matched_sku)
-                final_answer_source = 'kit_fallback'
-            else:
-                answer = 'В базе знаний и документации нет данных по этому запросу.'
-                final_answer_source = 'no_context'
-
-        return await self._finalize_answer(context, answer, answer_style, final_answer_source)
-
-    async def answer_stream(
-        self,
-        query: str,
-        session_id: str | None = None,
-        answer_style: str = 'detailed',
-        conversation_id: str | None = None,
-    ):
-        context = await self._prepare_answer_context(
-            query,
-            session_id=session_id,
-            answer_style=answer_style,
-            conversation_id=conversation_id,
-        )
-        yield {'event': 'meta', 'data': {'session_id': context.sid, 'conversation_id': context.cid, 'request_id': context.request_id}}
-
-        if context.immediate_answer is not None:
-            yield {'event': 'delta', 'data': {'text': context.immediate_answer}}
-            response = await self._finalize_answer(context, context.immediate_answer, answer_style, 'immediate')
-            yield {'event': 'done', 'data': {
-                'session_id': response['session_id'],
-                'conversation_id': response['conversation_id'],
-                'request_id': response['request_id'],
-                'answer': response['answer'],
-                'answer_mode': response['answer_mode'],
-                'confidence': response['confidence'],
-            }}
-            return
-
-        assert context.prompt is not None
-        context.tools_called.append('llm')
-        self._log_prompt_preview(context.request_id, SYSTEM_PROMPT, context.prompt)
-
-        try:
-            parts: list[str] = []
-            async for delta_text in self.llm.stream_chat(SYSTEM_PROMPT, context.prompt):
-                if not delta_text:
-                    continue
-                parts.append(delta_text)
-                yield {'event': 'delta', 'data': {'text': delta_text}}
-
-            answer = ''.join(parts)
-            if not answer.strip():
-                answer = await self.llm.chat(SYSTEM_PROMPT, context.prompt)
-                if answer:
-                    yield {'event': 'delta', 'data': {'text': answer}}
-
-            response = await self._finalize_answer(context, answer, answer_style, 'llm_stream')
-            yield {'event': 'done', 'data': {
-                'session_id': response['session_id'],
-                'conversation_id': response['conversation_id'],
-                'request_id': response['request_id'],
-                'answer': response['answer'],
-                'answer_mode': response['answer_mode'],
-                'confidence': response['confidence'],
-            }}
-        except Exception:
-            yield {'event': 'error', 'data': {'message': 'Не удалось обработать сообщение. Попробуйте повторить запрос.'}}
 
     @staticmethod
     def _build_retrieval_trace(

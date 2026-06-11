@@ -1,5 +1,3 @@
-export type AnswerStyle = 'short' | 'detailed';
-
 export type SourceItem = {
   doc_id: string;
   product: string;
@@ -39,7 +37,7 @@ export type ChatRequest = {
   session_id: string | null;
   conversation_id: string | null;
   message: string;
-  answer_style: AnswerStyle;
+  answer_style?: 'detailed';
 };
 
 export type ChatResponse = {
@@ -76,11 +74,6 @@ export type ChatResponse = {
   }>;
   route?: Record<string, unknown>;
 };
-
-export type StreamDonePayload = Pick<
-  ChatResponse,
-  'session_id' | 'conversation_id' | 'request_id' | 'answer' | 'answer_mode' | 'confidence'
->;
 
 export type FeedbackRequest = {
   request_id: string;

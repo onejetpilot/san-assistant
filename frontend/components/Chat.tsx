@@ -46,7 +46,6 @@ export default function Chat() {
   const [message, setMessage] = useState('');
   const [loading, setLoading] = useState(false);
   const [sessionId, setSessionId] = useState<string | null>(null);
-  const [answerStyle, setAnswerStyle] = useState<'short' | 'detailed'>('detailed');
   const [turns, setTurns] = useState<Turn[]>([]);
 
   useEffect(() => {
@@ -64,7 +63,7 @@ export default function Chat() {
       const r = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ session_id: sessionId, message: userText, answer_style: answerStyle }),
+        body: JSON.stringify({ session_id: sessionId, message: userText, answer_style: 'detailed' }),
       });
       const data: ChatResponse = await r.json();
       if (data.session_id) {
@@ -171,17 +170,7 @@ export default function Chat() {
 
         <aside className="space-y-4">
           <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-            <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Стиль ответа</label>
-            <select
-              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-800"
-              value={answerStyle}
-              onChange={e => setAnswerStyle(e.target.value as 'short' | 'detailed')}
-            >
-              <option value="detailed">Подробный</option>
-              <option value="short">Краткий</option>
-            </select>
-
-            <label className="mb-2 mt-4 block text-xs font-semibold uppercase tracking-wide text-slate-500">Вопрос</label>
+            <label className="mb-2 block text-xs font-semibold uppercase tracking-wide text-slate-500">Вопрос</label>
             <textarea
               className="min-h-[140px] w-full rounded-lg border border-slate-300 px-3 py-2 text-sm text-slate-800"
               value={message}
