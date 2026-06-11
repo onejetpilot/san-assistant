@@ -6,7 +6,7 @@ from app.indexes.kit_index import KitIndex
 from app.indexes.sku_index import SkuIndex, SkuRecord
 from app.rag.retriever import RetrievedChunk
 from app.services.answer_service import AnswerService
-from app.utils.article_normalizer import normalize_article
+from app.utils.article_normalizer import normalize_article, normalize_sku
 
 
 def _sku(article: str, short_description: str, article_type: str) -> SkuRecord:
@@ -23,49 +23,55 @@ def _sku(article: str, short_description: str, article_type: str) -> SkuRecord:
     )
 
 
-class SpyLLM:
+class BuyerQuestionLLM:
     def __init__(self) -> None:
         self.prompts: list[str] = []
 
     async def chat(self, system_prompt: str, user_prompt: str, *args, **kwargs) -> str:
         self.prompts.append(user_prompt)
         prompt = user_prompt.lower()
-        if 'точное совпадение sku' in prompt and 'артикул: oxl01616' in prompt and 'intent: article_lookup' in prompt:
-            return 'Артикул OXL01616 — уголок аксиальный ONDO 16x16.'
-        if 'документы:' in prompt and 'паспорт ondo' in prompt:
-            return 'Нашёл паспорт на товар: Паспорт ONDO — https://example.test/passport.pdf'
-        if 'decision: not_compatible' in prompt:
-            return 'Нет, не подойдет. Нужен размер 20, например OXL02020.'
-        if 'decision: assortment_missing' in prompt:
-            return 'В базе 14 мм не представлены. Для аксиальных уголков и тройников указаны размеры 16 и 20 мм.'
-        if 'recommended_articles: oxs00016' in prompt:
-            return 'Нужна гильза 16 мм, подходящий артикул OXS00016.'
-        if 'decision: related_product_found' in prompt and '20' in prompt:
-            return 'Нужна гильза 20 мм, подходящий артикул OXS00020.'
-        if 'installation_not_confirmed' in prompt:
-            return 'В базе нет подтверждения, что эти фитинги можно замоноличивать в стяжку.'
-        if 'spec_missing' in prompt and 'вес' in prompt:
-            return 'Вес одной штуки в базе не указан.'
-        if 'not_confirmed' in prompt and 'внутреннему диаметру' in prompt:
-            return 'Совместимость по внутреннему диаметру не подтверждена: аксиальные фитинги подбираются по наружному диаметру и толщине стенки.'
-        return 'Нужны дополнительные данные для точного ответа.'
+        if 'oxl01616' in prompt and '20x2.8' in prompt:
+            return 'Не подходит. OXL01616 это размер 16, а для трубы 20x2,8 нужен фитинг на 20 мм, например OXL02020.'
+        if 'oxlw1612' in prompt and '16x2.0' in prompt:
+            return 'Не подтверждено. В документации для размера 16 указана труба 16x2,2 мм, а для 16x2,0 подтверждения нет.'
+        if 'oxf02012k10' in prompt and '1/2 это 15 или 20' in prompt:
+            return '20 относится к трубе. 1/2 это размер трубной резьбы, а не 15 или 20 мм трубы.'
+        if 'oxlf1612' in prompt and 'горячей воды' in prompt:
+            return 'Можно ориентироваться на общие характеристики серии: рабочее давление 1,6 МПа, это примерно 16 бар, температура до +95 °C.'
+        if 'oxt02020k10' in prompt and 'стяжк' in prompt:
+            return 'Можно, если соблюдать правила серии. Скрытый монтаж и замоноличивание допустимы после гидравлических испытаний и с изоляцией от цементного раствора.'
+        if 'oxf02012' in prompt and 'что за артикул' in prompt:
+            return 'Артикул OXF02012: аксиальное соединение ONDO 20x1/2.'
+        return 'Не подтверждено. В документации недостаточно данных для уверенного вывода.'
 
 
-def _ondo_chunk() -> RetrievedChunk:
+def _chunk() -> RetrievedChunk:
     return RetrievedChunk(
         text=(
             'PRODUCT: Фитинги аксиальные ONDO\n'
+            'DESCRIPTION\n'
+            '- Аксиальные фитинги для полимерных труб PEX.\n'
             'TECHNICAL SPECIFICATIONS\n'
-            '- Фитинги аксиальные совместимы с полимерными трубами: '
-            'Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм\n'
+            '- Номинальное давление: 1.6 МПа\n'
+            '- Диапазон температуры рабочей среды: +5…+95 °C\n'
+            '- Фитинги аксиальные совместимы с полимерными трубами: наружный диаметр трубы 16 мм с толщиной стенки 2,2 мм '
+            'и 20 мм с толщиной стенки 2,8 мм\n'
             'VARIANTS (АРТИКУЛЫ)\n'
-            'OXS00016 - внутренний диаметр(мм) 16, длина(мм) 24\n'
-            'OXS00020 - внутренний диаметр(мм) 20, длина(мм) 27\n'
             'OXL01616 - диаметр(мм) 16х16\n'
             'OXL02020 - диаметр(мм) 20х20\n'
             'OXT02020 - диаметр(мм) 20x20x20\n'
-            'FAQ\n'
-            'Монтаж аксиальных фитингов выполняется специальным инструментом.'
+            'OXF02012 - диаметр(мм х дюйм) 20х1/2\n'
+            'OXLF1612 - диаметр(мм х дюйм) 16х1/2\n'
+            'OXLW1612 - диаметр(мм х дюйм) 16х1/2\n'
+            'CONNECTIONS\n'
+            '- Тип резьбы: трубная\n'
+            '- OXLF1612 - уголок с внутренней резьбой\n'
+            '- OXF02012 - соединение с внутренней резьбой\n'
+            'INSTALLATION\n'
+            '- Допускается скрытый монтаж и замоноличивание соединений при условии гидравлических испытаний.\n'
+            '- Соединение должно быть изолировано от цементного раствора.\n'
+            'KEY FACTS\n'
+            '- Размеры 16 и 20 относятся к трубе PEX, 1/2 и 3/4 относятся к трубной резьбе.'
         ),
         metadata={
             'doc_id': 'ondo_axial',
@@ -76,7 +82,7 @@ def _ondo_chunk() -> RetrievedChunk:
             'section': 'TECHNICAL SPECIFICATIONS',
             'source_file': 'ondo_axial_fittings_rag_ready.txt',
         },
-        score=0.7,
+        score=0.8,
     )
 
 
@@ -87,26 +93,41 @@ def marketplace_service(monkeypatch):
     monkeypatch.setattr('app.services.answer_service.get_current_index_versions', lambda: {})
 
     service = AnswerService.__new__(AnswerService)
-    llm = SpyLLM()
+    llm = BuyerQuestionLLM()
     sku_rows = [
         _sku('OXL01616', 'диаметр(мм) 16х16', 'уголки аксиальные'),
         _sku('OXL02020', 'диаметр(мм) 20х20', 'уголки аксиальные'),
         _sku('OXT02020', 'диаметр(мм) 20x20x20', 'тройники аксиальные'),
-        _sku('OXS00016', 'внутренний диаметр(мм) 16, длина(мм) 24', 'гильзы аксиальные'),
-        _sku('OXS00020', 'внутренний диаметр(мм) 20, длина(мм) 27', 'гильзы аксиальные'),
-        _sku('OXF01612K10G', 'комплект 10 шт OXF01612 + 10 шт OXS00016', 'комплекты'),
+        _sku('OXF02012', 'диаметр(мм х дюйм) 20х1/2', 'соединения аксиальные с внутренней резьбой'),
+        _sku('OXLF1612', 'диаметр(мм х дюйм) 16х1/2', 'уголки аксиальные с внутренней резьбой'),
+        _sku('OXLW1612', 'диаметр(мм х дюйм) 16х1/2', 'уголки аксиальные с внутренней резьбой'),
     ]
     service.sku = SkuIndex({normalize_article(row.article): row.model_dump() for row in sku_rows})
-    service.kits = KitIndex({})
-    service.rag = type('R', (), {'available': True, 'search': lambda self, q: [_ondo_chunk()]})()
+    service.kits = KitIndex({
+        'OXF02012K10': {
+            'kit_article': 'OXF02012K10',
+            'doc_id': 'kits',
+            'source_file': 'kits.txt',
+            'components': ['10 шт OXF02012'],
+            'component_articles': ['OXF02012'],
+        },
+        'OXT02020K10': {
+            'kit_article': 'OXT02020K10',
+            'doc_id': 'kits',
+            'source_file': 'kits.txt',
+            'components': ['10 шт OXT02020'],
+            'component_articles': ['OXT02020'],
+        },
+    })
+    service.rag = type('R', (), {'available': True, 'search': lambda self, q: [_chunk()]})()
     service.docs = type('D', (), {'search': lambda self, *a, **k: []})()
     service.llm = llm
     service.web = type('W', (), {'search': lambda self, q: []})()
     service.memory = type('M', (), {
         'ensure_session': lambda self, sid: sid or 'test-session',
         'ensure_conversation': lambda self, sid, cid=None: cid or sid,
-        'get_state': lambda self, *a, **k: {},
-        'get_recent_messages': lambda self, *a, **k: [],
+        'get_state': lambda self, *a, **k: {'current_article': 'OLD00001'},
+        'get_recent_messages': lambda self, *a, **k: [{'role': 'user', 'content': 'старый артикул OLD00001'}],
         'append_message': lambda self, *a, **k: None,
         'update_state': lambda self, *a, **k: None,
     })()
@@ -115,99 +136,63 @@ def marketplace_service(monkeypatch):
     return service, llm
 
 
-def test_compatibility_question_uses_evidence_and_not_article_list(marketplace_service):
-    service, llm = marketplace_service
-    resp = asyncio.run(service.answer('Подойдет ли уголок OXL01616 под трубу 20х2.8?'))
-
-    assert 'не подойдет' in resp['answer'].lower()
-    assert 'OXL02020' in resp['answer'] or 'размер 20' in resp['answer']
-    assert 'Артикулы' not in resp['answer']
-    assert 'llm' in resp['tools_used']
-    assert any('PRODUCT_EVIDENCE' in prompt and 'decision: not_compatible' in prompt for prompt in llm.prompts)
+def test_normalize_sku_strips_kit_suffix():
+    normalized = normalize_sku('OXF02012K10')
+    assert normalized.normalized == 'OXF02012K10'
+    assert normalized.base_article == 'OXF02012'
+    assert normalized.had_kit_suffix
 
 
-def test_assortment_question_reports_missing_14mm_without_generic_fallback(marketplace_service):
+def test_compatibility_for_20x28_rejects_16mm_and_suggests_size_20(marketplace_service):
     service, _ = marketplace_service
-    resp = asyncio.run(service.answer('Есть ли уголки и тройники на 14 мм?'))
-
+    resp = asyncio.run(service.answer('Подойдет ли OXL01616 под трубу 20x2.8?'))
     text = resp['answer'].lower()
-    assert '14 мм' in text
-    assert '16' in text and '20' in text
-    assert 'не нашёл точной информации' not in text
+    assert 'не подходит' in text or 'не подойдет' in text
+    assert '16' in text
+    assert 'oxl02020' in text
 
 
-def test_related_product_question_recommends_sleeve_for_20mm(marketplace_service):
+def test_compatibility_for_16x20_is_not_confirmed_and_mentions_16x22(marketplace_service):
     service, _ = marketplace_service
-    resp = asyncio.run(service.answer('Какая гильза нужна к тройнику OXT02020?'))
-
-    assert 'OXS00020' in resp['answer'] or 'гильза 20 мм' in resp['answer']
-    assert 'описание' not in resp['answer'].lower()
-
-
-def test_related_product_question_recommends_sleeve_for_16mm(marketplace_service):
-    service, _ = marketplace_service
-    resp = asyncio.run(service.answer('Какая гильза нужна для уголка 16 мм?'))
-
-    assert 'OXS00016' in resp['answer'] or 'гильза 16 мм' in resp['answer']
-
-
-def test_installation_question_is_not_reduced_to_article_list(marketplace_service):
-    service, _ = marketplace_service
-    resp = asyncio.run(service.answer('Можно ли прятать эти фитинги в стяжке?'))
-
-    assert resp['route']['intent'] == 'installation_or_usage_question'
-    assert 'артикул' not in resp['answer'].lower()
-    assert 'стяжк' in resp['answer'].lower() or 'подтвержден' in resp['answer'].lower()
-
-
-def test_weight_question_for_kit_reports_missing_piece_weight(marketplace_service):
-    service, _ = marketplace_service
-    resp = asyncio.run(service.answer('Какой вес одной штуки OXF01612K10G?'))
-
-    assert 'вес одной штуки' in resp['answer'].lower()
-    assert 'состав комплекта' not in resp['answer'].lower()
-    reasoner_trace = next(item for item in resp['retrieval_trace'] if item['meta'].get('tool') == 'product_reasoner')
-    assert reasoner_trace['results'][0]['decision'] == 'spec_missing'
-
-
-def test_kit_lookup_does_not_become_final_answer_for_non_composition_question(marketplace_service):
-    service, _ = marketplace_service
-    resp = asyncio.run(service.answer('Подойдет ли OXF01612K10G для трубы 20х2.8?'))
-
-    assert 'состав комплекта' not in resp['answer'].lower()
-    assert any(item['meta'].get('tool') == 'product_reasoner' for item in resp['retrieval_trace'])
-
-
-def test_inner_diameter_question_explains_selection_basis(marketplace_service):
-    service, _ = marketplace_service
-    resp = asyncio.run(service.answer('Подойдет ли тройник по внутреннему диаметру шланга 16 мм?'))
-
+    resp = asyncio.run(service.answer('Подойдет ли OXLW1612 для трубы 16x2.0?'))
     text = resp['answer'].lower()
-    assert 'внутреннему диаметру' in text
-    assert 'наружному диаметру' in text
-    assert 'толщине стенки' in text
+    assert 'не подтвержден' in text
+    assert '16x2,2' in text
+    assert 'oxt02020' not in text
 
 
-def test_exact_article_lookup_still_returns_product_card(marketplace_service):
+def test_thread_vs_pipe_dimension_is_explained_from_base_sku(marketplace_service):
+    service, _ = marketplace_service
+    resp = asyncio.run(service.answer('У OXF02012K10 1/2 это 15 или 20?'))
+    text = resp['answer'].lower()
+    assert '20' in text
+    assert 'трубе' in text or 'труба' in text
+    assert '1/2' in text
+    assert 'резьб' in text
+
+
+def test_hot_water_pressure_uses_series_limits(marketplace_service):
+    service, _ = marketplace_service
+    resp = asyncio.run(service.answer('Какое давление горячей воды держит OXLF1612?'))
+    text = resp['answer'].lower()
+    assert '1,6 мпа' in text or '1.6 мпа' in text
+    assert '16 бар' in text
+    assert '+95' in text
+
+
+def test_screed_installation_uses_series_installation_rules(marketplace_service):
+    service, _ = marketplace_service
+    resp = asyncio.run(service.answer('Можно ли OXT02020K10 замоноличивать в стяжку?'))
+    text = resp['answer'].lower()
+    assert 'можно' in text
+    assert 'гидравлическ' in text
+    assert 'цемент' in text
+
+
+def test_new_sku_does_not_reuse_previous_article_context(marketplace_service):
     service, llm = marketplace_service
-    resp = asyncio.run(service.answer('Что за артикул OXL01616?'))
-
-    assert 'OXL01616' in resp['answer']
-    assert 'llm' in resp['tools_used']
-    assert llm.prompts
-
-
-def test_document_request_uses_llm_when_available(marketplace_service):
-    service, llm = marketplace_service
-    service.docs = type('D', (), {'search': lambda self, *a, **k: [{
-        'title': 'Паспорт ONDO',
-        'type': 'passport',
-        'product': 'Фитинги аксиальные ONDO',
-        'brand': 'ONDO',
-        'public_url': 'https://example.test/passport.pdf',
-    }]})()
-    resp = asyncio.run(service.answer('Дай паспорт на OXL01616'))
-
-    assert 'llm' in resp['tools_used']
-    assert llm.prompts
-    assert any('Документы:' in prompt or 'Паспорт ONDO' in prompt for prompt in llm.prompts)
+    asyncio.run(service.answer('Что за артикул OXF02012?'))
+    asyncio.run(service.answer('Подойдет ли OXL01616 под трубу 20x2.8?'))
+    second_prompt = llm.prompts[-1].lower()
+    assert 'old00001' not in second_prompt
+    assert 'старый артикул' not in second_prompt

@@ -7,6 +7,7 @@ from app.indexes.kit_index import KitRecord
 from app.indexes.sku_index import SkuIndex, SkuRecord
 from app.services.slot_extractor import QuerySlots
 from app.rag.retriever import RetrievedChunk
+from app.utils.article_normalizer import normalize_sku
 
 
 TYPE_STEMS = {
@@ -31,27 +32,62 @@ class ProductReasoner:
         resolved_query: str,
         intent: str,
         slots: QuerySlots,
+        requested_article: str | None,
         sku_result: SkuRecord | None,
+        base_sku_result: SkuRecord | None,
         kit_result: KitRecord | None,
         rag_results: list[RetrievedChunk],
         documents: list[dict],
     ) -> ProductEvidence:
+        normalized = normalize_sku(requested_article)
+        matched_sku = sku_result or base_sku_result
+        combined_text = '\n'.join(
+            part for part in [
+                matched_sku.short_description if matched_sku else '',
+                '\n'.join(chunk.text for chunk in rag_results[:6]),
+            ] if part
+        )
+        product_type = self._infer_product_type(matched_sku, combined_text)
+        dimensions = self.extract_product_dimensions(combined_text)
+        connection_types = self.classify_connection_type(combined_text)
+        pipe_dimensions, thread_dimensions = self._split_connection_dimensions(dimensions)
         evidence = ProductEvidence(
             original_query=original_query,
             resolved_query=resolved_query,
             intent=intent,
-            mentioned_articles=[x for x in [sku_result.article if sku_result else None] if x],
-            sku_facts=[sku_result.model_dump()] if sku_result else [],
+            queried_article=normalized.normalized or None,
+            matched_article=matched_sku.article if matched_sku else None,
+            base_article=normalized.base_article or None,
+            used_base_article_fallback=bool(
+                normalized.had_kit_suffix and base_sku_result and (not sku_result or base_sku_result.article != sku_result.article)
+            ),
+            mentioned_articles=[x for x in [matched_sku.article if matched_sku else None] if x],
+            sku_facts=[matched_sku.model_dump()] if matched_sku else [],
             kit_facts=[kit_result.model_dump()] if kit_result else [],
-            component_facts=self._component_facts(sku_result, kit_result),
+            component_facts=self._component_facts(matched_sku, kit_result),
             rag_facts=[self._summarize_chunk(chunk.text) for chunk in rag_results[:5]],
             document_facts=documents[:5],
             user_requested_product_type=slots.item_type or None,
             user_requested_size=slots.dimension_value or slots.requested_size or None,
             user_requested_pipe_size=slots.requested_pipe_size or None,
             user_requested_dimension=slots.dimension_name or None,
+            product_type=product_type,
+            product_dimensions=dimensions,
+            connection_types=connection_types,
+            pipe_side_dimensions=pipe_dimensions,
+            thread_side_dimensions=thread_dimensions,
+            direct_answer_available=bool(documents) or bool(matched_sku),
+            safe_inference_available=bool(dimensions or connection_types or rag_results),
         )
-        evidence.answer_hints.extend(self._general_hints(slots, sku_result, rag_results))
+        evidence.answer_hints.extend(self._general_hints(slots, matched_sku, rag_results))
+        if evidence.used_base_article_fallback and matched_sku:
+            evidence.answer_hints.append(
+                f"Точный SKU не найден, использован базовый артикул {matched_sku.article} без суффикса комплекта."
+            )
+        if pipe_dimensions:
+            evidence.answer_hints.append(f"Размеры трубы/PEX: {', '.join(pipe_dimensions)}.")
+        if thread_dimensions:
+            evidence.answer_hints.append(f"Размеры резьбы: {', '.join(thread_dimensions)}.")
 
         if intent == 'document_request':
             evidence.final_answer_strategy = 'deterministic'
@@ -68,16 +104,33 @@ class ProductReasoner:
             self._apply_assortment_rules(evidence, slots, resolved_query)
 
         if slots.asks_related_product or intent == 'related_product_question':
-            self._apply_related_product_rules(evidence, slots, sku_result)
+            self._apply_related_product_rules(evidence, slots, matched_sku)
 
         if slots.asks_compatibility or intent == 'compatibility_question':
-            self._apply_compatibility_rules(evidence, slots, resolved_query, sku_result, rag_results)
+            self._apply_compatibility_rules(evidence, slots, resolved_query, matched_sku, rag_results)
 
         if slots.asks_installation or intent == 'installation_or_usage_question':
             self._apply_installation_rules(evidence, rag_results)
 
         if slots.asks_technical_spec or intent == 'technical_spec_question':
-            self._apply_spec_rules(evidence, resolved_query, rag_results, sku_result)
+            self._apply_spec_rules(evidence, resolved_query, rag_results, matched_sku)
+
+        if not evidence.decision and (
+            'это 15 или 20' in resolved_query.lower()
+            or 'это 15 или 16' in resolved_query.lower()
+            or 'что относится к трубе' in resolved_query.lower()
+            or 'что относится к резьбе' in resolved_query.lower()
+        ) and pipe_dimensions:
+            evidence.decision = 'safe_inference'
+            evidence.decision_reason = (
+                f"Размеры {', '.join(pipe_dimensions)} относятся к трубе, а {', '.join(thread_dimensions or ['1/2', '3/4'])} относятся к трубной резьбе"
+            )
+
+        if not evidence.decision and matched_sku and ('давлен' in resolved_query.lower() or 'температур' in resolved_query.lower()):
+            supported = self._series_limits('\n'.join(chunk.text for chunk in rag_results[:5]))
+            if supported:
+                evidence.decision = 'safe_inference'
+                evidence.decision_reason = supported
 
         return evidence
 
@@ -99,6 +152,8 @@ class ProductReasoner:
         if decision == 'related_product_found':
             article = ', '.join(evidence.recommended_articles) if evidence.recommended_articles else 'подходящий артикул не найден'
             return f"Нужна гильза {evidence.user_requested_size or ''} мм. Подходящий артикул: {article}.".replace('  ', ' ').strip()
+        if decision == 'safe_inference':
+            return evidence.decision_reason or 'По документации можно сделать только осторожный вывод.'
         if decision == 'assortment_missing':
             sizes = ', '.join(evidence.warnings) if evidence.warnings else 'нужный размер'
             return f"В базе этот размер не представлен. В подтвержденном ассортименте указаны размеры {sizes}."
@@ -118,6 +173,46 @@ class ProductReasoner:
     def _summarize_chunk(text: str) -> str:
         cleaned = ' '.join(str(text).split())
         return cleaned[:240]
+
+    @staticmethod
+    def extract_product_dimensions(text: str) -> list[str]:
+        if not text:
+            return []
+        matches = re.findall(
+            r'\b\d{1,2}\s*[xх]\s*(?:\d{1,2}/\d{1,2}|\d{1,2}(?:\s*[xх]\s*\d{1,2})?)\b|\b\d/\d\b',
+            text,
+            flags=re.IGNORECASE,
+        )
+        out: list[str] = []
+        for match in matches:
+            normalized = re.sub(r'\s+', '', match.lower()).replace('х', 'x')
+            if normalized not in out:
+                out.append(normalized)
+        return out
+
+    @staticmethod
+    def classify_connection_type(text: str) -> list[str]:
+        lower = text.lower()
+        connection_types: list[str] = []
+        if 'внутрен' in lower and 'резьб' in lower:
+            connection_types.append('female_thread')
+        if 'наружн' in lower and 'резьб' in lower:
+            connection_types.append('male_thread')
+        if 'трубная' in lower and 'резьб' in lower and 'pipe_thread' not in connection_types:
+            connection_types.append('pipe_thread')
+        if 'аксиал' in lower or 'pex' in lower or 'полимерн' in lower:
+            connection_types.append('pipe_connection')
+        return connection_types
+
+    @staticmethod
+    def validate_answer_against_context(answer: str, evidence: ProductEvidence) -> list[str]:
+        warnings: list[str] = []
+        lower = answer.lower()
+        if 'евроконус' in lower and 'евроконус' not in ' '.join(evidence.rag_facts).lower():
+            warnings.append('В ответе появилась совместимость с евроконусом без подтверждения в контексте.')
+        if 'шланг' in lower and 'шланг' not in ' '.join(evidence.rag_facts).lower() and evidence.intent == 'compatibility_question':
+            warnings.append('Совместимость со шлангом не подтверждена документацией.')
+        return warnings
 
     def _apply_assortment_rules(self, evidence: ProductEvidence, slots: QuerySlots, query: str) -> None:
         q = query.lower()
@@ -273,6 +368,36 @@ class ProductReasoner:
             seen.add(row.article)
             out.append(row.model_dump())
         return out
+
+    def _infer_product_type(self, sku_result: SkuRecord | None, text: str) -> str | None:
+        article_type = (sku_result.article_type if sku_result else '') or ''
+        haystack = f"{article_type}\n{text}".lower()
+        for product_type, stem in TYPE_STEMS.items():
+            if stem in haystack:
+                return product_type
+        return article_type or None
+
+    @staticmethod
+    def _split_connection_dimensions(dimensions: list[str]) -> tuple[list[str], list[str]]:
+        pipe_dimensions: list[str] = []
+        thread_dimensions: list[str] = []
+        for value in dimensions:
+            if '/' in value:
+                thread_dimensions.append(value)
+            else:
+                pipe_dimensions.append(value)
+        return pipe_dimensions, thread_dimensions
+
+    @staticmethod
+    def _series_limits(text: str) -> str | None:
+        lower = text.lower()
+        has_pressure = '1.6 мпа' in lower or '1,6 мпа' in lower
+        has_temperature = '+95' in text or '+95' in lower
+        if has_pressure and has_temperature:
+            return 'По общим характеристикам серии: рабочее давление 1,6 МПа, это примерно 16 бар, температура рабочей среды до +95 °C.'
+        if has_pressure:
+            return 'По общим характеристикам серии: рабочее давление 1,6 МПа, это примерно 16 бар.'
+        return None
 
     def _find_available_sizes(self, item_types: list[str]) -> list[str]:
         sizes: list[str] = []

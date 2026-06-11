@@ -7,6 +7,10 @@ class ProductEvidence(BaseModel):
     original_query: str
     resolved_query: str
     intent: str | None = None
+    queried_article: str | None = None
+    matched_article: str | None = None
+    base_article: str | None = None
+    used_base_article_fallback: bool = False
 
     mentioned_articles: list[str] = Field(default_factory=list)
     sku_facts: list[dict] = Field(default_factory=list)
@@ -19,6 +23,13 @@ class ProductEvidence(BaseModel):
     user_requested_size: str | None = None
     user_requested_pipe_size: str | None = None
     user_requested_dimension: str | None = None
+    product_type: str | None = None
+    product_dimensions: list[str] = Field(default_factory=list)
+    connection_types: list[str] = Field(default_factory=list)
+    pipe_side_dimensions: list[str] = Field(default_factory=list)
+    thread_side_dimensions: list[str] = Field(default_factory=list)
+    direct_answer_available: bool = False
+    safe_inference_available: bool = False
 
     decision: str | None = None
     decision_reason: str | None = None

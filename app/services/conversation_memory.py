@@ -18,8 +18,8 @@ _EMPTY_STATE = {
     'current_doc_id': None,
     'last_intent': None,
     'last_answer_mode': None,
-    'last_sources_json': [],
-    'last_documents_json': [],
+    'last_sources_json': None,
+    'last_documents_json': None,
 }
 
 
@@ -65,7 +65,10 @@ class ConversationMemoryService:
             ).scalars().first()
         db.close()
         if not row:
-            return dict(_EMPTY_STATE)
+            empty = dict(_EMPTY_STATE)
+            empty['last_sources_json'] = []
+            empty['last_documents_json'] = []
+            return empty
         return {
             'current_product': row.current_product,
             'current_brand': row.current_brand,

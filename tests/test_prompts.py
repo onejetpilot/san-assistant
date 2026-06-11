@@ -4,7 +4,7 @@ from app.core.prompts import build_user_prompt
 def test_build_user_prompt_formats_context_without_raw_python_repr():
     prompt = build_user_prompt({
         'original_query': 'А паспорт на него есть?',
-        'resolved_query': 'А паспорт на него есть? Контекст: артикул OXF01612.',
+        'resolved_query': 'А паспорт на него есть? OXF01612',
         'answer_mode': 'document_answer',
         'answer_style': 'short',
         'confidence': {'label': 'high', 'reason': 'document_found'},
@@ -51,6 +51,7 @@ def test_build_user_prompt_formats_context_without_raw_python_repr():
     assert 'TECHNICAL SPECIFICATIONS' in prompt
     assert "{'intent'" not in prompt
     assert "{'title'" not in prompt
+    assert 'Сначала дай прямой вывод' in prompt
 
 
 def test_build_user_prompt_uses_explicit_empty_markers():

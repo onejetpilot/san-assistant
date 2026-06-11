@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import re
 from pathlib import Path
 from functools import lru_cache
@@ -37,7 +38,7 @@ from app.utils.text import extract_article_candidate
 from app.utils.timing import now_ms
 from app.web_search.san_team_search import SanTeamSearch
 from app.evaluation.answer_judge import evaluate_answer
-from app.utils.article_normalizer import normalize_article
+from app.utils.article_normalizer import normalize_article, normalize_sku
 from app.core.logging import get_logger
 
 
@@ -140,6 +141,106 @@ class AnswerService:
                 continue
             compact.append({'role': role, 'content': content[:500]})
         return compact
+
+    @staticmethod
+    def _infer_intent(query: str, article: str | None) -> str:
+        q = query.lower().strip()
+        compact = re.sub(r'\s+', ' ', q)
+        if not q or len(q) < 4 or q in {'что лучше?', 'что лучше', 'что это?', 'что это'}:
+            return 'clarify'
+        if compact in {'привет', 'здравствуйте', 'спасибо', 'пока', 'добрый день', 'добрый вечер'}:
+            return 'smalltalk'
+        if any(token in q for token in ['стих', 'анекдот', 'погода', 'рецепт', 'фильм']):
+            return 'out_of_scope'
+        if any(token in q for token in ['паспорт', 'сертификат', 'инструкц', 'pdf', 'документ']):
+            return 'document_request'
+        if any(token in q for token in ['что входит', 'состав комплект', 'состав набора', 'сколько штук', 'комплектац']):
+            return 'kit_composition_question'
+        if article and any(token in q for token in ['что за артикул', 'характеристики артикула', 'как называется товар', 'что за ']):
+            return 'article_lookup'
+        if any(token in q for token in ['подойдет', 'подойдёт', 'совместим', 'можно ли', 'какая гильза', 'аналог', 'размер']):
+            return 'compatibility_question'
+        if any(token in q for token in ['стяжк', 'замонол', 'скрыт', 'монтаж']):
+            return 'installation_or_usage_question'
+        if any(token in q for token in ['давлен', 'температур', 'вес', 'длина', 'резьб']):
+            return 'technical_spec_question'
+        return 'product_question'
+
+    @staticmethod
+    def _extract_doc_type(query: str, requested_doc_type: str | None) -> str | None:
+        if requested_doc_type:
+            return requested_doc_type
+        q = query.lower()
+        if 'паспорт' in q:
+            return 'passport'
+        if 'сертификат' in q:
+            return 'certificate'
+        if 'инструкц' in q:
+            return 'manual'
+        return None
+
+    def _collect_relevant_context(
+        self,
+        *,
+        query: str,
+        requested_article: str | None,
+        sku_result: SkuRecord | None,
+        base_sku_result: SkuRecord | None,
+    ) -> list[RetrievedChunk]:
+        search_queries = [query]
+        if requested_article:
+            search_queries.append(requested_article)
+        if base_sku_result and base_sku_result.article not in search_queries:
+            search_queries.append(base_sku_result.article)
+        if sku_result and sku_result.product:
+            search_queries.append(f"{sku_result.product} {query}")
+
+        raw_chunks: list[RetrievedChunk] = []
+        for candidate in search_queries[:4]:
+            if not candidate:
+                continue
+            raw_chunks.extend(self.rag.search(candidate) or [])
+
+        if not raw_chunks:
+            raw_chunks = self._fallback_rag_context(query, sku_result or base_sku_result)
+
+        preferred_groups = {
+            'description',
+            'variants',
+            'connections',
+            'technical',
+            'installation',
+            'limitations',
+            'faq',
+            'key_facts',
+            'fallback_source_file',
+        }
+        preferred_sections = {
+            'DESCRIPTION',
+            'VARIANTS (АРТИКУЛЫ)',
+            'CONNECTIONS',
+            'TECHNICAL SPECIFICATIONS',
+            'INSTALLATION',
+            'FAQ',
+            'KEY FACTS',
+            'LIMITATIONS',
+            'MATERIALS',
+        }
+        filtered: list[RetrievedChunk] = []
+        seen: set[tuple[str, str]] = set()
+        for chunk in raw_chunks:
+            metadata = getattr(chunk, 'metadata', {}) or {}
+            group = str(metadata.get('section_group', '')).lower()
+            section = str(metadata.get('section', ''))
+            if group and group not in preferred_groups and section not in preferred_sections:
+                continue
+            key = (metadata.get('doc_id', ''), section or chunk.text[:80])
+            if key in seen:
+                continue
+            seen.add(key)
+            filtered.append(chunk)
+
+        return prioritize_chunks(filtered or raw_chunks, list(preferred_groups))[:8]
 
     @staticmethod
     def _log_prompt_preview(request_id: str, system_prompt: str, user_prompt: str) -> None:
@@ -426,33 +527,32 @@ class AnswerService:
         cid = self.memory.ensure_conversation(sid, conversation_id)
         state = self.memory.get_state(cid, session_id=sid)
         recent = self.memory.get_recent_messages(cid, limit=settings.CHAT_HISTORY_LIMIT, session_id=sid)
-        resolved = resolve_query(query, state, recent)
-        resolved_query = resolved['resolved_query']
+        resolved_query = query.strip()
         expanded_query = self.expander.expand(resolved_query)
         slots = extract_slots(resolved_query)
 
         self.memory.append_message(sid, cid, role='user', content=query, request_id=request_id, metadata_json={'resolved_query': resolved_query})
-
-        routing_ctx = build_routing_context(query, state, recent)
-        route = await route_query(
-            resolved_query,
-            conversation_state=state,
-            recent_messages=recent,
-            original_query=query,
-        )
-        intent = route.intent
-        tools = route.tools_to_call
-        router = route.to_legacy_dict()
+        article = extract_article_candidate(resolved_query)
+        normalized_sku = normalize_sku(article)
+        requested_article = normalized_sku.normalized or None
+        intent = self._infer_intent(resolved_query, requested_article)
+        router = {
+            'intent': intent,
+            'selected_route': 'minimal_rag_pipeline',
+            'expected_answer_type': 'consultant_answer',
+            'confidence': 0.9 if requested_article else 0.7,
+            'reason': 'minimal_pipeline',
+            'tools': [],
+        }
         tools_called: list[str] = []
         empty_results: list[str] = []
         fallback_used = False
 
-        if route.needs_clarification or 'clarify' in tools:
+        if intent == 'clarify':
             answer = 'Не совсем понял запрос. Уточните, пожалуйста, товар, артикул или параметр (например: "артикулы гильз ONDO" или "паспорт на ONDO...").'
-            log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['clarify'], latency_ms=now_ms() - started)
             payload = {
                 'session_id': sid, 'conversation_id': cid, 'request_id': request_id, 'answer': answer,
-                'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
+                'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': False,
                 'answer_mode': 'clarify', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'low', 'tools_used': ['clarify'],
                 'retrieval_trace': [],
@@ -461,12 +561,11 @@ class AnswerService:
             self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': 'ambiguous_question', 'answer_mode': 'clarify'})
             return payload
 
-        if intent == 'smalltalk' or 'smalltalk' in tools:
+        if intent == 'smalltalk':
             answer = self._smalltalk_answer(query)
-            log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['smalltalk'], latency_ms=now_ms() - started)
             payload = {
                 'session_id': sid, 'conversation_id': cid, 'request_id': request_id, 'answer': answer,
-                'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
+                'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': False,
                 'answer_mode': 'short_answer', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'high', 'tools_used': ['smalltalk'],
                 'retrieval_trace': [],
@@ -475,12 +574,11 @@ class AnswerService:
             self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent, 'answer_mode': 'short_answer'})
             return payload
 
-        if intent in {'out_of_scope', 'offtopic'} or 'refuse' in tools:
+        if intent == 'out_of_scope':
             answer = 'Я консультирую только по сантехническим товарам и связанной документации.'
-            log_routing_decision(routing_ctx, route, request_id=request_id, tools_called=['refuse'], latency_ms=now_ms() - started)
             payload = {
                 'session_id': sid, 'conversation_id': cid, 'request_id': request_id, 'answer': answer,
-                'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': resolved['depends_on_history'],
+                'original_query': query, 'resolved_query': resolved_query, 'depends_on_history': False,
                 'answer_mode': 'not_enough_data', 'sources': [], 'documents': [], 'used_web_search': False,
                 'web_results': [], 'confidence': 'high', 'tools_used': ['refuse'],
                 'retrieval_trace': [],
@@ -489,91 +587,60 @@ class AnswerService:
             self.memory.append_message(sid, cid, role='assistant', content=answer, request_id=request_id, metadata_json={'intent': intent})
             return payload
 
-        article = routing_ctx.article or extract_article_candidate(resolved_query)
         sku_result = None
+        base_sku_result = None
         kit_from_global = None
-        if route.uses_tool('sku_lookup') and article:
+        if requested_article:
             tools_called.append('sku_lookup')
-            sku_result = self.sku.lookup(article)
+            sku_result = self.sku.lookup(requested_article)
+            if normalized_sku.base_article and normalized_sku.base_article != requested_article:
+                base_sku_result = self.sku.lookup(normalized_sku.base_article)
             if not sku_result:
                 empty_results.append('sku_lookup')
-        if route.uses_tool('kit_lookup') and article:
+        matched_sku = sku_result or base_sku_result
+        if requested_article:
             tools_called.append('kit_lookup')
-            kit_from_global = self.kits.lookup(article)
+            kit_from_global = self.kits.lookup(requested_article) or self.kits.lookup(normalized_sku.base_article)
             if not kit_from_global:
                 empty_results.append('kit_lookup')
-        elif article and not kit_from_global and re.search(r'K\d', article, flags=re.IGNORECASE):
-            kit_from_global = self.kits.lookup(article)
 
-        rag_results: list = []
+        rag_results: list[RetrievedChunk] = []
         chroma_unavailable = not self.rag.available
-        if route.uses_tool('rag_search'):
-            tools_called.append('rag_search')
-            rag_results = self.rag.search(expanded_query)
-            if not rag_results:
-                empty_results.append('rag_search')
-        if route.uses_tool('rag_search') and not rag_results:
-            rag_results = self._fallback_rag_context(resolved_query, sku_result)
-            if rag_results and 'rag_search' in empty_results:
-                empty_results.remove('rag_search')
-        section_groups = preferred_section_groups(intent, slots)
-        rag_results = prioritize_chunks(rag_results, section_groups)
+        tools_called.append('rag_search')
+        rag_results = self._collect_relevant_context(
+            query=expanded_query,
+            requested_article=requested_article,
+            sku_result=sku_result,
+            base_sku_result=base_sku_result,
+        )
+        if not rag_results:
+            empty_results.append('rag_search')
         rag_results_strong = filter_relevant_chunks(rag_results)
 
-        doc_type = None
         ql = resolved_query.lower()
-        if 'паспорт' in ql:
-            doc_type = 'passport'
-        elif 'сертификат' in ql:
-            doc_type = 'certificate'
-        elif 'инструкц' in ql:
-            doc_type = 'manual'
-        if slots.requested_doc_type:
-            doc_type = slots.requested_doc_type
+        doc_type = self._extract_doc_type(resolved_query, slots.requested_doc_type)
 
         doc_results = []
-        if route.uses_tool('document_search'):
+        if intent == 'document_request' or requested_article:
             tools_called.append('document_search')
-            doc_results = self.docs.search(expanded_query, article=article, doc_type=doc_type)
+            doc_results = self.docs.search(expanded_query, article=requested_article or normalized_sku.base_article, doc_type=doc_type)
             if not doc_results:
                 empty_results.append('document_search')
 
-        # comparison flow
-        comparison_block = None
-        if intent == 'comparison_question':
-            candidates = [normalize_article(x) for x in re.findall(r'\b[A-Za-zА-Яа-я0-9._\-/]{5,}\b', resolved_query)]
-            candidates = [c for c in candidates if c]
-            unique = list(dict.fromkeys(candidates))[:5]
-            cmp_rows = []
-            for c in unique:
-                row = self.sku.lookup(c)
-                if row:
-                    cmp_rows.append(row)
-            if len(cmp_rows) >= 2:
-                common_brand = len({r.brand for r in cmp_rows}) == 1
-                comparison_block = {
-                    'common': f"Одинаковый бренд: {'да' if common_brand else 'нет'}",
-                    'differences': [f"{r.article}: {r.product} / {r.category}" for r in cmp_rows],
-                    'use_cases': [f"{r.article} — {r.short_description or 'смотрите описание'}" for r in cmp_rows],
-                }
-
         web_results = []
         used_web_search = False
-        local_miss = not sku_result and not doc_results and not has_strong_rag_context(rag_results)
-        should_web_search = (
-            settings.ENABLE_WEB_SEARCH
-            and route.uses_tool('san_team_search')
-            and (intent == 'web_search_needed' or (local_miss and route.fallback_allowed))
-        )
+        local_miss = not matched_sku and not doc_results and not has_strong_rag_context(rag_results)
+        should_web_search = settings.ENABLE_WEB_SEARCH and local_miss
         if should_web_search:
             tools_called.append('san_team_search')
-            web_results = await self.web.search(resolved_query)
+            web_response = self.web.search(resolved_query)
+            web_results = await web_response if inspect.isawaitable(web_response) else web_response
             used_web_search = bool(web_results)
             if not web_results:
                 empty_results.append('san_team_search')
 
         conf = compute_confidence(
-            bool(sku_result or kit_from_global),
+            bool(matched_sku or kit_from_global),
             [r.score for r in rag_results_strong or rag_results],
             bool(doc_results),
             used_web_only=used_web_search and not rag_results_strong,
@@ -586,12 +653,8 @@ class AnswerService:
             answer_mode = 'technical_answer'
         if intent == 'document_request':
             answer_mode = 'document_answer'
-        if intent == 'comparison_question' or 'сравн' in ql:
-            answer_mode = 'comparison_answer'
         if intent in {'product_question', 'price_or_availability_question'} or ('подоб' in ql and intent != 'knowledge_base_question'):
             answer_mode = 'selection_answer'
-        if intent in {'knowledge_base_question', 'comparison_question', 'follow_up'}:
-            answer_mode = 'technical_answer'
 
         display_rag = rag_results_strong or rag_results
         sources = [{
@@ -609,7 +672,9 @@ class AnswerService:
             resolved_query=resolved_query,
             intent=intent,
             slots=slots,
+            requested_article=requested_article,
             sku_result=sku_result,
+            base_sku_result=base_sku_result,
             kit_result=kit_from_global,
             rag_results=display_rag,
             documents=documents,
@@ -618,43 +683,21 @@ class AnswerService:
         answer = ''
         final_answer_source = 'llm_composed'
         deterministic_reason = ''
-        composition_keywords = (
-            'из чего состоит',
-            'состав',
-            'что входит',
-            'комплект',
-            'комплектац',
-            'набор',
-            'в наборе',
-        )
-        asks_composition = slots.asks_composition or any(k in ql for k in composition_keywords)
-        asks_dimension = slots.intent_hint == 'dimension' or slots.dimension_name in {'length', 'dimension'}
-        target_type = slots.item_type
-        kit_components = sku_result.kit_components if sku_result and _valid_kit_components(sku_result.kit_components) else []
-        if not kit_components and kit_from_global:
-            kit_components = kit_from_global.components
-
-        if comparison_block:
-            product_evidence.answer_hints.append(
-                f"Сравнение: {comparison_block['common']}; {'; '.join(comparison_block['differences'])}"
-            )
-
         rag_usable = has_strong_rag_context(rag_results) or (
             intent in KB_SYNTHESIS_INTENTS and has_weak_rag_context(rag_results)
         )
-        has_evidence = bool(sku_result or kit_from_global or documents or rag_usable or web_results or product_evidence.decision or product_evidence.answer_hints)
+        has_evidence = bool(matched_sku or kit_from_global or documents or rag_usable or web_results or product_evidence.decision or product_evidence.answer_hints)
 
-        rag_only_intents = set()
         try:
             rag_for_prompt = chunks_for_llm(rag_results, intent, slots)
             tools_called.append('llm')
             prompt = build_user_prompt({
                 'original_query': query,
                 'resolved_query': resolved_query,
-                'conversation_state': state,
-                'recent_messages': self._history_for_llm(recent, settings.CHAT_HISTORY_FOR_LLM) if route.use_history or resolved.get('depends_on_history') else [],
+                'conversation_state': {},
+                'recent_messages': [],
                 'router_decision': router,
-                'sku_result': sku_result.model_dump() if sku_result else None,
+                'sku_result': matched_sku.model_dump() if matched_sku else None,
                 'product_evidence': product_evidence.model_dump(),
                 'product_cards': [],
                 'rag_chunks': [self._sanitize_context(r.text) for r in rag_for_prompt[:5]],
@@ -666,19 +709,25 @@ class AnswerService:
             })
             self._log_prompt_preview(request_id, SYSTEM_PROMPT, prompt)
             answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
+            answer_warnings = self.reasoner.validate_answer_against_context(answer, product_evidence)
+            if answer_warnings:
+                product_evidence.warnings.extend(answer_warnings)
             final_answer_source = 'llm_composed'
         except Exception:
             fallback_used = True
-            composed = self.reasoner.compose_deterministic_answer(product_evidence, sku_result=sku_result)
+            composed = self.reasoner.compose_deterministic_answer(product_evidence, sku_result=matched_sku)
             if composed:
                 answer = composed
                 final_answer_source = 'evidence_fallback'
             elif intent == 'document_request' and documents:
                 answer = 'Найдены документы: ' + '; '.join([f"{d['title']} ({d['public_url']})" for d in documents[:5]])
                 final_answer_source = 'document_fallback'
-            elif sku_result:
-                answer = f"Артикул {sku_result.article}: {sku_result.product}, бренд {sku_result.brand}, категория {sku_result.category}."
+            elif matched_sku:
+                answer = f"Артикул {matched_sku.article}: {matched_sku.product}, бренд {matched_sku.brand}, категория {matched_sku.category}."
                 final_answer_source = 'sku_fallback'
+            elif has_evidence:
+                answer = 'Не подтверждено. В найденном контексте недостаточно прямых данных для уверенного ответа.'
+                final_answer_source = 'evidence_soft_fallback'
             else:
                 answer = build_no_context_fallback(intent)
                 final_answer_source = 'fallback'
@@ -693,23 +742,13 @@ class AnswerService:
         if used_web_search and web_results and 'san.team' not in answer:
             answer += '\n\nЧасть информации найдена через поиск по сайту san.team.'
 
-        log_routing_decision(
-            routing_ctx,
-            route,
-            request_id=request_id,
-            tools_called=tools_called,
-            empty_results=empty_results,
-            fallback_used=fallback_used,
-            latency_ms=now_ms() - started,
-        )
-
-        if conf['label'] == 'low' or (not sources and not documents and not sku_result and not kit_from_global):
+        if conf['label'] == 'low' or (not sources and not documents and not matched_sku and not kit_from_global):
             save_knowledge_gap(
                 request_id=request_id,
                 original_query=query,
                 resolved_query=resolved_query,
                 intent=intent,
-                tools_used=tools,
+                tools_used=tools_called,
                 reason=conf.get('reason', 'low_confidence_or_no_results'),
             )
 
@@ -717,8 +756,8 @@ class AnswerService:
         latency = now_ms() - started
         retrieval_trace = self._build_retrieval_trace(
             query=resolved_query,
-            article=article,
-            sku_result=sku_result,
+            article=requested_article,
+            sku_result=matched_sku,
             kit_from_global=kit_from_global,
             rag_results=display_rag,
             documents=documents,
@@ -738,14 +777,14 @@ class AnswerService:
             'answer': answer,
             'original_query': query,
             'resolved_query': resolved_query,
-            'depends_on_history': resolved['depends_on_history'],
+            'depends_on_history': False,
             'answer_mode': answer_mode,
             'sources': sources,
             'documents': documents,
             'used_web_search': used_web_search,
             'web_results': web_results,
             'confidence': conf['label'],
-            'tools_used': tools_called or tools,
+            'tools_used': tools_called,
             'retrieval_trace': retrieval_trace,
             'route': router,
         }
@@ -759,7 +798,7 @@ class AnswerService:
             intent=intent,
             answer_mode=answer_mode,
             router_mode=settings.ROUTER_MODE,
-            tools_used_json=tools_called or tools,
+            tools_used_json=tools_called,
             sources_json=sources,
             documents_json=documents,
             used_web_search=used_web_search,
@@ -771,10 +810,10 @@ class AnswerService:
             needs_human_review=(conf['label'] == 'low'),
         )
 
-        current_product = sku_result.product if sku_result else (sources[0]['product'] if sources else state.get('current_product'))
-        current_brand = sku_result.brand if sku_result else (sources[0]['brand'] if sources else state.get('current_brand'))
-        current_category = sku_result.category if sku_result else (sources[0]['category'] if sources else state.get('current_category'))
-        current_article = sku_result.article if sku_result else (article if article else state.get('current_article'))
+        current_product = matched_sku.product if matched_sku else (sources[0]['product'] if sources else None)
+        current_brand = matched_sku.brand if matched_sku else (sources[0]['brand'] if sources else None)
+        current_category = matched_sku.category if matched_sku else (sources[0]['category'] if sources else None)
+        current_article = matched_sku.article if matched_sku else requested_article
         current_doc_id = sources[0]['doc_id'] if sources else state.get('current_doc_id')
 
         self.memory.update_state(

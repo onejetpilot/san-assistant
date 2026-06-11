@@ -46,8 +46,8 @@ class IngestionRun(Base):
     documents_count: Mapped[int] = mapped_column(Integer, default=0)
     chunks_count: Mapped[int] = mapped_column(Integer, default=0)
     sku_count: Mapped[int] = mapped_column(Integer, default=0)
-    errors_json: Mapped[list] = mapped_column(JSON, default=[])
-    warnings_json: Mapped[list] = mapped_column(JSON, default=[])
+    errors_json: Mapped[list] = mapped_column(JSON, default=list)
+    warnings_json: Mapped[list] = mapped_column(JSON, default=list)
     index_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -57,7 +57,7 @@ class DocumentIndexRun(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     status: Mapped[str] = mapped_column(String(32))
     documents_count: Mapped[int] = mapped_column(Integer, default=0)
-    document_types_count_json: Mapped[dict] = mapped_column(JSON, default={})
+    document_types_count_json: Mapped[dict] = mapped_column(JSON, default=dict)
     index_version: Mapped[str | None] = mapped_column(String(64), nullable=True)
     indexed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
@@ -69,7 +69,7 @@ class KnowledgeGap(Base):
     original_query: Mapped[str] = mapped_column(Text)
     resolved_query: Mapped[str] = mapped_column(Text)
     intent: Mapped[str] = mapped_column(String(64))
-    tools_used_json: Mapped[list] = mapped_column(JSON, default=[])
+    tools_used_json: Mapped[list] = mapped_column(JSON, default=list)
     reason: Mapped[str] = mapped_column(Text)
     status: Mapped[str] = mapped_column(String(32), default='open')
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -102,7 +102,7 @@ class ChatMessage(Base):
     role: Mapped[str] = mapped_column(String(16))
     content: Mapped[str] = mapped_column(Text)
     request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
-    metadata_json: Mapped[dict] = mapped_column(JSON, default={})
+    metadata_json: Mapped[dict] = mapped_column(JSON, default=dict)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
@@ -118,6 +118,6 @@ class ConversationState(Base):
     current_doc_id: Mapped[str | None] = mapped_column(String(256), nullable=True)
     last_intent: Mapped[str | None] = mapped_column(String(64), nullable=True)
     last_answer_mode: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    last_sources_json: Mapped[list] = mapped_column(JSON, default=[])
-    last_documents_json: Mapped[list] = mapped_column(JSON, default=[])
+    last_sources_json: Mapped[list] = mapped_column(JSON, default=list)
+    last_documents_json: Mapped[list] = mapped_column(JSON, default=list)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
