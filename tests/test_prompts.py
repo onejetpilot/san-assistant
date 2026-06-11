@@ -4,6 +4,9 @@ from app.core.prompts import build_user_prompt
 def test_build_user_prompt_formats_context_without_raw_python_repr():
     prompt = build_user_prompt({
         'original_query': 'А паспорт на него есть?',
+        'requested_article': 'OXF01612K10',
+        'technical_article': 'OXF01612',
+        'pack_article': 'OXF01612K10',
         'matched_article': 'OXF01612',
         'sku_result': {
             'article': 'OXF01612',
@@ -22,11 +25,15 @@ def test_build_user_prompt_formats_context_without_raw_python_repr():
     })
 
     assert '- Артикул: OXF01612' in prompt
+    assert 'Запрошенный артикул:' in prompt
+    assert 'Технический артикул:' in prompt
+    assert 'Комплектный артикул:' in prompt
     assert 'Найденный SKU:' in prompt
     assert 'Паспорт ONDO (passport)' in prompt
     assert 'https://example.test/passport.pdf' in prompt
     assert 'TECHNICAL SPECIFICATIONS' in prompt
     assert 'Отвечай только по этим данным.' in prompt
+    assert 'технические характеристики отвечай по техническому артикулу' in prompt
     assert "{'title'" not in prompt
     assert 'PRODUCT_EVIDENCE:' not in prompt
     assert 'Web результаты:' not in prompt
@@ -38,6 +45,7 @@ def test_build_user_prompt_uses_explicit_empty_markers():
     })
 
     assert 'NO_ARTICLE' in prompt
+    assert 'NO_PACK_ARTICLE' in prompt
     assert 'NO_SKU' in prompt
     assert 'NO_CONTEXT' in prompt
     assert 'NO_DOCUMENTS' in prompt

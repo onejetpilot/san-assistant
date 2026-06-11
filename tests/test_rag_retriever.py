@@ -117,6 +117,21 @@ def test_document_aware_retrieval_adds_mandatory_sections_for_resolved_sku(monke
     assert all(item.metadata.get('doc_id') == 'ondo_axial' for item in results)
 
 
+def test_document_aware_retrieval_prefers_explicit_doc_id(monkeypatch):
+    monkeypatch.setattr(retriever_module.EmbeddingClient, 'is_configured', staticmethod(lambda: True))
+    monkeypatch.setattr(retriever_module.EmbeddingClient, 'embed_texts_sync', lambda self, texts: [[0.1, 0.2]])
+    monkeypatch.setattr(retriever_module, 'get_chroma_client', lambda: type('Client', (), {'get_or_create_collection': lambda self, name, embedding_function=None: _Collection()})())
+    monkeypatch.setattr(retriever_module.SkuIndex, 'load', classmethod(lambda cls, path: cls({})))
+
+    rag = RagRetriever()
+    results = rag.search('Что означает 1/2 у OXF02012K10?', preferred_doc_id='ondo_axial')
+
+    assert results
+    assert all(item.metadata.get('doc_id') == 'ondo_axial' for item in results)
+    sections = {item.metadata.get('section') for item in results}
+    assert 'CONNECTIONS' in sections
+
+
 def test_document_aware_retrieval_anchors_to_confident_doc_without_sku(monkeypatch):
     monkeypatch.setattr(retriever_module.EmbeddingClient, 'is_configured', staticmethod(lambda: True))
     monkeypatch.setattr(retriever_module.EmbeddingClient, 'embed_texts_sync', lambda self, texts: [[0.1, 0.2]])

@@ -121,6 +121,30 @@ class AnswerService:
             return str(current_article), True
         return None, False
 
+    def _resolve_sku_context(self, requested_article: str | None, normalized_sku) -> dict:
+        exact_sku = self.sku.lookup(requested_article) if requested_article else None
+        base_sku = None
+
+        if normalized_sku.base_article and normalized_sku.base_article != requested_article:
+            base_sku = self.sku.lookup(normalized_sku.base_article)
+
+        if normalized_sku.had_kit_suffix and base_sku:
+            return {
+                'original_article': requested_article,
+                'technical_article': normalized_sku.base_article,
+                'matched_sku': base_sku,
+                'pack_sku': exact_sku,
+                'used_base_from_pack': True,
+            }
+
+        return {
+            'original_article': requested_article,
+            'technical_article': requested_article,
+            'matched_sku': exact_sku or base_sku,
+            'pack_sku': None,
+            'used_base_from_pack': False,
+        }
+
     def _collect_relevant_context(
         self,
         *,
@@ -132,7 +156,14 @@ class AnswerService:
         anchor_article = requested_article or (matched_sku.article if matched_sku else None)
         if anchor_article and anchor_article not in search_query:
             search_query = f'{query} {anchor_article}'
-        raw_chunks = self.rag.search(search_query) or []
+        preferred_doc_id = matched_sku.doc_id if matched_sku and matched_sku.doc_id else None
+        try:
+            raw_chunks = self.rag.search(
+                search_query,
+                preferred_doc_id=preferred_doc_id,
+            ) or []
+        except TypeError:
+            raw_chunks = self.rag.search(search_query) or []
 
         preferred_groups = {
             'description',
@@ -353,32 +384,47 @@ class AnswerService:
         tools_called: list[str] = []
         empty_results: list[str] = []
 
-        sku_result = None
-        base_sku_result = None
+        sku_context = {
+            'original_article': lookup_article,
+            'technical_article': lookup_article,
+            'matched_sku': None,
+            'pack_sku': None,
+            'used_base_from_pack': False,
+        }
         if lookup_article:
             tools_called.append('sku_lookup')
-            sku_result = self.sku.lookup(lookup_article)
-            if requested_article and normalized_sku.base_article and normalized_sku.base_article != requested_article:
-                base_sku_result = self.sku.lookup(normalized_sku.base_article)
-            if not (sku_result or base_sku_result):
+            if requested_article:
+                sku_context = self._resolve_sku_context(lookup_article, normalized_sku)
+            else:
+                history_row = self.sku.lookup(lookup_article)
+                sku_context = {
+                    'original_article': lookup_article,
+                    'technical_article': lookup_article,
+                    'matched_sku': history_row,
+                    'pack_sku': None,
+                    'used_base_from_pack': False,
+                }
+            if not sku_context['matched_sku'] and not sku_context['pack_sku']:
                 empty_results.append('sku_lookup')
-        matched_sku = sku_result or base_sku_result
+        matched_sku = sku_context['matched_sku']
+        technical_article = sku_context['technical_article'] or lookup_article
+        pack_sku = sku_context['pack_sku']
 
         kit_result = None
         if intent == 'kit_composition_question' and lookup_article:
             tools_called.append('kit_lookup')
-            base_article = normalized_sku.base_article if requested_article else lookup_article
+            base_article = normalized_sku.base_article if requested_article else technical_article
             kit_result = self.kits.lookup(lookup_article) or self.kits.lookup(base_article)
             if not kit_result:
                 empty_results.append('kit_lookup')
 
         tools_called.append('rag_search')
         rag_query = resolved_query
-        if history_article and history_article not in rag_query:
-            rag_query = f'{rag_query} {history_article}'
+        if technical_article and technical_article not in rag_query:
+            rag_query = f'{rag_query} {technical_article}'
         rag_results = self._collect_relevant_context(
             query=rag_query,
-            requested_article=lookup_article,
+            requested_article=technical_article,
             matched_sku=matched_sku,
         )
         if not rag_results:
@@ -390,7 +436,7 @@ class AnswerService:
             tools_called.append('document_search')
             documents_raw = self.docs.search(
                 rag_query,
-                article=lookup_article or normalized_sku.base_article,
+                article=technical_article or normalized_sku.base_article,
                 doc_type=self._extract_doc_type(resolved_query),
             )
             if not documents_raw:
@@ -439,7 +485,10 @@ class AnswerService:
             tools_called.append('llm')
             prompt = build_user_prompt({
                 'original_query': query,
-                'matched_article': lookup_article or (matched_sku.article if matched_sku else None),
+                'requested_article': lookup_article,
+                'technical_article': technical_article,
+                'pack_article': pack_sku.article if pack_sku else (lookup_article if sku_context['used_base_from_pack'] else None),
+                'matched_article': matched_sku.article if matched_sku else (technical_article or lookup_article),
                 'sku_result': matched_sku.model_dump() if matched_sku else None,
                 'rag_chunks': [self._sanitize_context(chunk.text) for chunk in display_rag[:8]],
                 'document_results': documents,
@@ -478,7 +527,7 @@ class AnswerService:
         latency = now_ms() - started
         retrieval_trace = self._build_retrieval_trace(
             query=resolved_query,
-            article=lookup_article,
+            article=technical_article or lookup_article,
             sku_result=matched_sku,
             kit_result=kit_result,
             rag_results=display_rag,
@@ -529,7 +578,7 @@ class AnswerService:
         current_product = matched_sku.product if matched_sku else (sources[0]['product'] if sources else None)
         current_brand = matched_sku.brand if matched_sku else (sources[0]['brand'] if sources else None)
         current_category = matched_sku.category if matched_sku else (sources[0]['category'] if sources else None)
-        current_article = matched_sku.article if matched_sku else lookup_article
+        current_article = technical_article or (matched_sku.article if matched_sku else lookup_article)
         current_doc_id = sources[0]['doc_id'] if sources else None
 
         self.memory.update_state(

@@ -44,10 +44,10 @@ class RagRetriever:
         except Exception:
             self.available = False
 
-    def search(self, query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+    def search(self, query: str, top_k: int | None = None, preferred_doc_id: str | None = None) -> list[RetrievedChunk]:
         if not self.collection:
             return []
-        doc_id = self._resolve_doc_id(query)
+        doc_id = preferred_doc_id or self._resolve_doc_id(query)
         if doc_id:
             return self._search_within_document(query, doc_id, top_k=top_k)
         global_results = self._semantic_query(query, top_k=(top_k or settings.TOP_K) * 3)
@@ -61,7 +61,10 @@ class RagRetriever:
     def _resolve_doc_id(self, query: str) -> str | None:
         article = extract_article_candidate(query)
         normalized = normalize_sku(article)
-        candidates = [normalized.normalized, normalized.base_article]
+        if normalized.had_kit_suffix:
+            candidates = [normalized.base_article, normalized.normalized]
+        else:
+            candidates = [normalized.normalized, normalized.base_article]
         for candidate in candidates:
             if not candidate:
                 continue

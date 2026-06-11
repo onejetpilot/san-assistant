@@ -49,9 +49,16 @@ def build_user_prompt(payload: dict) -> str:
     rag_block = '\n\n--- RAG CHUNK ---\n\n'.join(str(chunk).strip() for chunk in rag_chunks if str(chunk).strip()) or 'NO_CONTEXT'
     return (
         f"Вопрос пользователя:\n{payload.get('original_query')}\n\n"
+        f"Запрошенный артикул:\n{payload.get('requested_article') or 'NO_ARTICLE'}\n\n"
+        f"Технический артикул:\n{payload.get('technical_article') or 'NO_ARTICLE'}\n\n"
+        f"Комплектный артикул:\n{payload.get('pack_article') or 'NO_PACK_ARTICLE'}\n\n"
         f"Найденный SKU:\n{payload.get('matched_article') or 'NO_ARTICLE'}\n\n"
         f"SKU-карточка:\n{_format_sku(payload.get('sku_result'))}\n\n"
         f"RAG-контекст:\n{rag_block}\n\n"
         f"Документы:\n{_format_documents(payload.get('document_results') or [])}\n\n"
-        "Отвечай только по этим данным."
+        "Инструкция:\n"
+        "- Отвечай только по этим данным.\n"
+        "- Если запрошенный артикул содержит K10/K05/K02, технические характеристики отвечай по техническому артикулу.\n"
+        "- Комплектный артикул используй только для количества штук и состава.\n"
+        "- Не объясняй покупателю внутреннюю маршрутизацию артикула."
     )

@@ -4,6 +4,7 @@ from app.indexes.kit_index import KitIndex, KitRecord
 from app.indexes.sku_index import SkuIndex, SkuRecord
 from app.rag.retriever import RetrievedChunk
 from app.services.answer_service import AnswerService
+from app.utils.article_normalizer import normalize_sku
 from app.utils.article_normalizer import normalize_article
 
 
@@ -85,6 +86,25 @@ def test_collect_relevant_context_keeps_single_document():
 
     assert len(chunks) == 1
     assert chunks[0].metadata['doc_id'] == 'ondo_axial'
+
+
+def test_resolve_sku_context_prefers_base_sku_for_pack_suffix():
+    service = AnswerService.__new__(AnswerService)
+    base = _sku('OXF02012', 'диаметр(мм х дюйм) 20х1/2')
+    pack = _sku('OXF02012K10', '10 шт OXF02012')
+    service.sku = SkuIndex(
+        {
+            normalize_article(base.article): base.model_dump(),
+            normalize_article(pack.article): pack.model_dump(),
+        }
+    )
+
+    ctx = service._resolve_sku_context('OXF02012K10', normalize_sku('OXF02012K10'))
+
+    assert ctx['technical_article'] == 'OXF02012'
+    assert ctx['matched_sku'].article == 'OXF02012'
+    assert ctx['pack_sku'].article == 'OXF02012K10'
+    assert ctx['used_base_from_pack'] is True
 
 
 def test_answer_returns_no_data_without_internet(monkeypatch):

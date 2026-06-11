@@ -40,6 +40,8 @@ class BuyerQuestionLLM:
             return 'Можно ориентироваться на общие характеристики серии: рабочее давление 1,6 МПа, это примерно 16 бар, температура до +95 °C.'
         if 'oxt02020k10' in prompt and 'стяжк' in prompt:
             return 'Можно, если соблюдать правила серии. Скрытый монтаж и замоноличивание допустимы после гидравлических испытаний и с изоляцией от цементного раствора.'
+        if 'oxtf2012k02' in prompt and '20 мм' in prompt:
+            return 'Размер 20 мм здесь означает подключение под PEX-трубу 20 мм, а 1/2" относится к резьбовой стороне.'
         if 'oxf02012' in prompt and 'что за артикул' in prompt:
             return 'Артикул OXF02012: аксиальное соединение ONDO 20x1/2.'
         return 'Не подтверждено. В документации недостаточно данных для уверенного вывода.'
@@ -60,6 +62,7 @@ def _chunk() -> RetrievedChunk:
             'OXL01616 - диаметр(мм) 16х16\n'
             'OXL02020 - диаметр(мм) 20х20\n'
             'OXT02020 - диаметр(мм) 20x20x20\n'
+            'OXTF2012 - диаметр(мм х дюйм) 20х1/2\n'
             'OXF02012 - диаметр(мм х дюйм) 20х1/2\n'
             'OXLF1612 - диаметр(мм х дюйм) 16х1/2\n'
             'OXLW1612 - диаметр(мм х дюйм) 16х1/2\n'
@@ -98,6 +101,7 @@ def marketplace_service(monkeypatch):
         _sku('OXL01616', 'диаметр(мм) 16х16', 'уголки аксиальные'),
         _sku('OXL02020', 'диаметр(мм) 20х20', 'уголки аксиальные'),
         _sku('OXT02020', 'диаметр(мм) 20x20x20', 'тройники аксиальные'),
+        _sku('OXTF2012', 'диаметр(мм х дюйм) 20х1/2', 'тройники аксиальные с внутренней резьбой'),
         _sku('OXF02012', 'диаметр(мм х дюйм) 20х1/2', 'соединения аксиальные с внутренней резьбой'),
         _sku('OXLF1612', 'диаметр(мм х дюйм) 16х1/2', 'уголки аксиальные с внутренней резьбой'),
         _sku('OXLW1612', 'диаметр(мм х дюйм) 16х1/2', 'уголки аксиальные с внутренней резьбой'),
@@ -117,6 +121,20 @@ def marketplace_service(monkeypatch):
             'source_file': 'kits.txt',
             'components': ['10 шт OXT02020'],
             'component_articles': ['OXT02020'],
+        },
+        'OXL01616K10': {
+            'kit_article': 'OXL01616K10',
+            'doc_id': 'kits',
+            'source_file': 'kits.txt',
+            'components': ['10 шт OXL01616'],
+            'component_articles': ['OXL01616'],
+        },
+        'OXTF2012K02': {
+            'kit_article': 'OXTF2012K02',
+            'doc_id': 'kits',
+            'source_file': 'kits.txt',
+            'components': ['2 шт OXTF2012'],
+            'component_articles': ['OXTF2012'],
         },
     })
     service.rag = type('R', (), {'available': True, 'search': lambda self, q: [_chunk()]})()
@@ -166,6 +184,7 @@ def test_thread_vs_pipe_dimension_is_explained_from_base_sku(marketplace_service
     assert 'трубе' in text or 'труба' in text
     assert '1/2' in text
     assert 'резьб' in text
+    assert 'в комплекте нет данных' not in text
 
 
 def test_hot_water_pressure_uses_series_limits(marketplace_service):
@@ -184,6 +203,36 @@ def test_screed_installation_uses_series_installation_rules(marketplace_service)
     assert 'можно' in text
     assert 'гидравлическ' in text
     assert 'цемент' in text
+    assert 'в комплекте нет информации' not in text
+
+
+def test_pack_angle_uses_base_technical_sku_for_pex_1622(marketplace_service):
+    service, llm = marketplace_service
+    resp = asyncio.run(service.answer('У вас есть в продаже OXL01616K10 под трубу 16 2.2?'))
+    text = resp['answer'].lower()
+    prompt = llm.prompts[-1].lower()
+    assert 'oxl01616' in prompt
+    assert 'технический артикул:\noxl01616' in prompt
+    assert 'комплектный артикул:\noxl01616k10' in prompt
+    assert 'комплект без детализации' not in text
+
+
+def test_pack_thread_tee_uses_base_technical_sku(marketplace_service):
+    service, llm = marketplace_service
+    resp = asyncio.run(service.answer('У OXTF2012K02 что значит диаметр 20 мм?'))
+    text = resp['answer'].lower()
+    prompt = llm.prompts[-1].lower()
+    assert 'pex-трубу 20 мм' in text or 'трубу 20 мм' in text
+    assert '1/2' in text
+    assert 'в комплекте нет данных' not in text
+    assert 'технический артикул:\noxtf2012' in prompt
+
+
+def test_pack_composition_keeps_exact_kit_article(marketplace_service):
+    service, _ = marketplace_service
+    resp = asyncio.run(service.answer('Что входит в комплект OXL01616K10?'))
+    text = resp['answer'].lower()
+    assert '10 шт oxl01616' in text
 
 
 def test_new_sku_does_not_reuse_previous_article_context(marketplace_service):
