@@ -5,3 +5,5 @@ __pycache__/
 .vscode/
 data/chroma/
 data/app.db
+frontend/.next/
+frontend/node_modules/
