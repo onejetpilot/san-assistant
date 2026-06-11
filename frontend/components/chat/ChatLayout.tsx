@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { chat, clearAccessToken, ApiError } from '../../lib/api';
+import { chat, chatStream, clearAccessToken, ApiError } from '../../lib/api';
 import { clearConversationId, getConversationId, getSessionId, setConversationId, setSessionId } from '../../lib/storage';
 import type { AnswerStyle, Message } from '../../lib/types';
 import TokenGate from '../auth/TokenGate';
@@ -46,40 +46,101 @@ export default function ChatLayout() {
 
   const inputLength = useMemo(() => input.length, [input]);
 
+  const updateLastAssistant = (updater: (message: Message) => Message) => {
+    setMessages((prev) => {
+      const next = [...prev];
+      for (let idx = next.length - 1; idx >= 0; idx -= 1) {
+        if (next[idx]?.role === 'assistant') {
+          next[idx] = updater({ ...next[idx] });
+          break;
+        }
+      }
+      return next;
+    });
+  };
+
   const onSend = async () => {
     const text = input.trim();
     if (!text || loading) return;
 
     setError(null);
     setLoading(true);
-    setMessages((prev) => [...prev, { role: 'user', content: text }]);
+    setMessages((prev) => [...prev, { role: 'user', content: text }, { role: 'assistant', content: '' }]);
     setInput('');
 
     try {
-      const res = await chat({ session_id: sessionId, conversation_id: conversationId, message: text, answer_style: answerStyle });
-      if (res.session_id) {
-        setSessionId(res.session_id);
-        setLocalSessionId(res.session_id);
+      let streamStarted = false;
+      let streamReceivedText = false;
+
+      try {
+        await chatStream(
+          { session_id: sessionId, conversation_id: conversationId, message: text, answer_style: answerStyle },
+          (meta) => {
+            streamStarted = true;
+            if (meta.session_id) {
+              setSessionId(meta.session_id);
+              setLocalSessionId(meta.session_id);
+            }
+            if (meta.conversation_id) {
+              setConversationId(meta.conversation_id);
+              setLocalConversationId(meta.conversation_id);
+            }
+            if (meta.request_id) {
+              updateLastAssistant((last) => ({ ...last, request_id: meta.request_id }));
+            }
+          },
+          (delta) => {
+            streamReceivedText = true;
+            updateLastAssistant((last) => ({ ...last, content: `${last.content}${delta}` }));
+          },
+          (final) => {
+            if (final.session_id) {
+              setSessionId(final.session_id);
+              setLocalSessionId(final.session_id);
+            }
+            if (final.conversation_id) {
+              setConversationId(final.conversation_id);
+              setLocalConversationId(final.conversation_id);
+            }
+            updateLastAssistant((last) => ({
+              ...last,
+              content: final.answer ?? last.content,
+              request_id: final.request_id ?? last.request_id,
+              confidence: final.confidence ?? last.confidence,
+              answer_mode: final.answer_mode ?? last.answer_mode,
+            }));
+          },
+          (message) => {
+            throw new Error(message);
+          },
+        );
+      } catch (streamError) {
+        if (!streamStarted && !streamReceivedText) {
+          const res = await chat({ session_id: sessionId, conversation_id: conversationId, message: text, answer_style: answerStyle });
+          if (res.session_id) {
+            setSessionId(res.session_id);
+            setLocalSessionId(res.session_id);
+          }
+          if (res.conversation_id) {
+            setConversationId(res.conversation_id);
+            setLocalConversationId(res.conversation_id);
+          }
+          updateLastAssistant(() => ({
+            role: 'assistant',
+            content: res.answer,
+            request_id: res.request_id,
+            sources: res.sources,
+            documents: res.documents,
+            web_results: res.web_results,
+            confidence: res.confidence,
+            used_web_search: res.used_web_search,
+            tools_used: res.tools_used,
+            answer_mode: res.answer_mode,
+          }));
+        } else {
+          throw streamError;
+        }
       }
-      if (res.conversation_id) {
-        setConversationId(res.conversation_id);
-        setLocalConversationId(res.conversation_id);
-      }
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          content: res.answer,
-          request_id: res.request_id,
-          sources: res.sources,
-          documents: res.documents,
-          web_results: res.web_results,
-          confidence: res.confidence,
-          used_web_search: res.used_web_search,
-          tools_used: res.tools_used,
-          answer_mode: res.answer_mode,
-        },
-      ]);
     } catch (e) {
       if (e instanceof ApiError && e.status === 401) {
         setNeedsToken(true);
@@ -157,7 +218,7 @@ export default function ChatLayout() {
               <div className="flex items-center justify-between gap-3">
                 <div>
                   <h2 className="text-sm font-semibold text-slate-900">Чат SAN Assistant</h2>
-                  <p className="text-xs text-slate-500">SKU lookup · RAG · документы · san.team fallback</p>
+                  <p className="text-xs text-slate-500">Консультант по сантехническим товарам</p>
                 </div>
                 <span className="rounded-full border border-slate-300 bg-white px-2 py-1 text-xs text-slate-600">
                   {loading ? 'Генерация ответа...' : 'Готов к запросу'}
@@ -187,8 +248,7 @@ export default function ChatLayout() {
                   </div>
                 </div>
               ))}
-
-              {loading && (
+              {loading && messages[messages.length - 1]?.role === 'assistant' && !messages[messages.length - 1]?.content && (
                 <div className="flex justify-start">
                   <div className="inline-flex items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs text-slate-600">
                     <span>SAN Assistant печатает</span>

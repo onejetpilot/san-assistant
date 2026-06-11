@@ -77,6 +77,11 @@ export type ChatResponse = {
   route?: Record<string, unknown>;
 };
 
+export type StreamDonePayload = Pick<
+  ChatResponse,
+  'session_id' | 'conversation_id' | 'request_id' | 'answer' | 'answer_mode' | 'confidence'
+>;
+
 export type FeedbackRequest = {
   request_id: string;
   rating: 'up' | 'down';

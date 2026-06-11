@@ -1,3 +1,5 @@
+import json
+
 from fastapi.testclient import TestClient
 
 from app.api.main import app
@@ -68,3 +70,38 @@ def test_chat_endpoint_returns_safe_500(monkeypatch):
     resp = client.post('/api/chat', json={'message': 'привет', 'session_id': None, 'answer_style': 'short'})
     assert resp.status_code == 500
     assert 'Не удалось обработать сообщение' in resp.json()['detail']
+
+
+def test_chat_stream_endpoint_yields_meta_delta_done(monkeypatch):
+    async def _answer_stream(message, session_id=None, answer_style='detailed', conversation_id=None):
+        yield {'event': 'meta', 'data': {'session_id': 's1', 'conversation_id': conversation_id or 'c1', 'request_id': 'r1'}}
+        yield {'event': 'delta', 'data': {'text': 'Да,'}}
+        yield {'event': 'delta', 'data': {'text': ' можно'}}
+        yield {'event': 'done', 'data': {'session_id': 's1', 'conversation_id': conversation_id or 'c1', 'request_id': 'r1', 'answer': 'Да, можно', 'answer_mode': 'product_qa', 'confidence': 'high'}}
+
+    monkeypatch.setattr(routes_chat.service, 'answer_stream', _answer_stream)
+
+    with client.stream('POST', '/api/chat/stream', json={'message': 'привет', 'session_id': None, 'answer_style': 'short'}) as resp:
+        assert resp.status_code == 200
+        body = ''.join(resp.iter_text())
+
+    assert 'event: meta' in body
+    assert 'event: delta' in body
+    assert 'event: done' in body
+    assert json.dumps({'text': 'Да,'}, ensure_ascii=False) in body
+    assert json.dumps({'answer': 'Да, можно', 'answer_mode': 'product_qa', 'confidence': 'high', 'conversation_id': 'c1', 'request_id': 'r1', 'session_id': 's1'}, ensure_ascii=False) in body
+
+
+def test_chat_stream_endpoint_returns_error_event(monkeypatch):
+    async def _answer_stream(*args, **kwargs):
+        raise RuntimeError('boom')
+        yield
+
+    monkeypatch.setattr(routes_chat.service, 'answer_stream', _answer_stream)
+
+    with client.stream('POST', '/api/chat/stream', json={'message': 'привет', 'session_id': None, 'answer_style': 'short'}) as resp:
+        assert resp.status_code == 200
+        body = ''.join(resp.iter_text())
+
+    assert 'event: error' in body
+    assert 'Не удалось обработать сообщение' in body
