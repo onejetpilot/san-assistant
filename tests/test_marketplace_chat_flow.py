@@ -76,8 +76,8 @@ def marketplace_service(monkeypatch):
     async def _llm_composer(self, system_prompt: str, user_prompt: str, *args, **kwargs):
         prompt = user_prompt.lower()
         query = ''
-        if 'запрос пользователя:\n' in prompt:
-            query = prompt.split('запрос пользователя:\n', 1)[1].split('\n\n', 1)[0].strip()
+        if 'вопрос пользователя:\n' in prompt:
+            query = prompt.split('вопрос пользователя:\n', 1)[1].split('\n\n', 1)[0].strip()
         case = CASE_BY_QUERY.get(query)
         if case:
             tokens = case.get('expects', {}).get('must_contain_all', [])
@@ -125,11 +125,7 @@ def marketplace_service(monkeypatch):
             return 'Рабочее давление: 1,6 МПа, примерно 16 бар. Для рабочей среды в базе указан диапазон +5…+95 °C.'
         return 'Не нашёл подтверждённых данных. Уточните артикул, бренд или размер.'
 
-    async def _web_empty(*args, **kwargs):
-        return []
-
     service.llm = type('L', (), {'chat': _llm_composer})()
-    service.web = type('W', (), {'search': _web_empty})()
     service.memory = type('M', (), {
         'ensure_session': lambda self, sid: sid or 'marketplace-session',
         'ensure_conversation': lambda self, sid, cid=None: cid or sid,
@@ -138,7 +134,6 @@ def marketplace_service(monkeypatch):
         'append_message': lambda self, *a, **k: None,
         'update_state': lambda self, *a, **k: None,
     })()
-    service.expander = type('E', (), {'expand': lambda self, q: q})()
     return service
 
 
@@ -147,7 +142,7 @@ def test_marketplace_cases_pass_full_answer_service_flow(marketplace_service):
         resp = asyncio.run(marketplace_service.answer(case['query']))
         assert check_answer(case, resp['answer']) == [], case['id']
         assert any(item['meta'].get('tool') == 'rag_search' for item in resp['retrieval_trace']), case['id']
-        assert any(item['meta'].get('tool') == 'product_reasoner' for item in resp['retrieval_trace']), case['id']
+        assert not any(item['meta'].get('tool') == 'product_reasoner' for item in resp['retrieval_trace']), case['id']
 
 
 def test_product_qa_flow_passes_series_context_to_llm(marketplace_service):
@@ -160,7 +155,7 @@ def test_product_qa_flow_passes_series_context_to_llm(marketplace_service):
     marketplace_service.llm.chat = _spy_llm.__get__(marketplace_service.llm, type(marketplace_service.llm))
     resp = asyncio.run(marketplace_service.answer('Уголок аксиальный 16х1/2 ONDO. Какое рабочее давление горячей воды держит?'))
 
-    assert resp['route']['selected_route'] == 'product_qa_flow'
+    assert resp['route']['selected_route'] == 'simple_rag_llm'
     assert prompts
     prompt = prompts[-1]
     assert 'Номинальное давление: 1.6 МПа' in prompt

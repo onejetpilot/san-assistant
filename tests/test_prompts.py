@@ -4,26 +4,7 @@ from app.core.prompts import build_user_prompt
 def test_build_user_prompt_formats_context_without_raw_python_repr():
     prompt = build_user_prompt({
         'original_query': 'А паспорт на него есть?',
-        'resolved_query': 'А паспорт на него есть? OXF01612',
-        'answer_mode': 'document_answer',
-        'answer_style': 'short',
-        'confidence': {'label': 'high', 'reason': 'document_found'},
-        'router_decision': {
-            'intent': 'document_request',
-            'selected_route': 'document_lookup',
-            'tools': ['document_search', 'rag_search'],
-            'confidence': 0.92,
-            'reason': 'document_marker',
-        },
-        'conversation_state': {
-            'current_article': 'OXF01612',
-            'current_product': 'Фитинги аксиальные ONDO',
-            'current_brand': 'ONDO',
-        },
-        'recent_messages': [
-            {'role': 'user', 'content': 'Что за OXF01612?'},
-            {'role': 'assistant', 'content': 'Артикул OXF01612: фитинг ONDO.'},
-        ],
+        'matched_article': 'OXF01612',
         'sku_result': {
             'article': 'OXF01612',
             'product': 'Фитинги аксиальные ONDO',
@@ -38,31 +19,25 @@ def test_build_user_prompt_formats_context_without_raw_python_repr():
             'product': 'Фитинги аксиальные ONDO',
             'public_url': 'https://example.test/passport.pdf',
         }],
-        'web_results': [],
     })
 
     assert '- Артикул: OXF01612' in prompt
-    assert 'PRODUCT_EVIDENCE:' in prompt
+    assert 'Найденный SKU:' in prompt
     assert 'Паспорт ONDO (passport)' in prompt
     assert 'https://example.test/passport.pdf' in prompt
     assert 'TECHNICAL SPECIFICATIONS' in prompt
-    assert 'Считай, что RAG-контекст уже собран из нужного товарного документа' in prompt
-    assert "{'intent'" not in prompt
+    assert 'Отвечай только по этим данным.' in prompt
     assert "{'title'" not in prompt
-    assert 'Классификация запроса:' not in prompt
-    assert 'Краткая история:' not in prompt
+    assert 'PRODUCT_EVIDENCE:' not in prompt
+    assert 'Web результаты:' not in prompt
 
 
 def test_build_user_prompt_uses_explicit_empty_markers():
     prompt = build_user_prompt({
         'original_query': 'Что известно?',
-        'resolved_query': 'Что известно?',
-        'answer_mode': 'technical_answer',
-        'answer_style': 'short',
     })
 
+    assert 'NO_ARTICLE' in prompt
     assert 'NO_SKU' in prompt
-    assert 'NO_PRODUCT_EVIDENCE' in prompt
     assert 'NO_CONTEXT' in prompt
     assert 'NO_DOCUMENTS' in prompt
-    assert 'NO_WEB_RESULTS' in prompt

@@ -122,7 +122,6 @@ def marketplace_service(monkeypatch):
     service.rag = type('R', (), {'available': True, 'search': lambda self, q: [_chunk()]})()
     service.docs = type('D', (), {'search': lambda self, *a, **k: []})()
     service.llm = llm
-    service.web = type('W', (), {'search': lambda self, q: []})()
     service.memory = type('M', (), {
         'ensure_session': lambda self, sid: sid or 'test-session',
         'ensure_conversation': lambda self, sid, cid=None: cid or sid,
@@ -131,8 +130,6 @@ def marketplace_service(monkeypatch):
         'append_message': lambda self, *a, **k: None,
         'update_state': lambda self, *a, **k: None,
     })()
-    service.expander = type('E', (), {'expand': lambda self, q: q})()
-    service.reasoner = None
     return service, llm
 
 

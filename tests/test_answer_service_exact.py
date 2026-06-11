@@ -1,8 +1,9 @@
-from app.indexes.kit_index import KitRecord
+import asyncio
+
+from app.indexes.kit_index import KitIndex, KitRecord
 from app.indexes.sku_index import SkuIndex, SkuRecord
 from app.rag.retriever import RetrievedChunk
 from app.services.answer_service import AnswerService
-from app.services.slot_extractor import extract_slots
 from app.utils.article_normalizer import normalize_article
 
 
@@ -59,133 +60,54 @@ def test_format_exact_kit_answer_with_component_descriptions():
     assert 'OXS00016 — внутренний диаметр(мм) 16' in answer
 
 
-def test_format_dimension_answer_from_sku():
-    answer = AnswerService._format_dimension_answer(
-        _sku('OXS00016', 'внутренний диаметр(мм) 16, длина(мм) 24, наружный диаметр(мм) 21,5'),
-        'length',
+def test_collect_relevant_context_keeps_single_document():
+    service = AnswerService.__new__(AnswerService)
+    service.rag = type('R', (), {
+        'search': lambda self, q: [
+            RetrievedChunk(
+                text='TECHNICAL SPECIFICATIONS\nНоминальное давление: 1.6 МПа',
+                metadata={'doc_id': 'ondo_axial', 'section': 'TECHNICAL SPECIFICATIONS', 'section_group': 'technical'},
+                score=0.8,
+            ),
+            RetrievedChunk(
+                text='FAQ\nДругой товар',
+                metadata={'doc_id': 'other_doc', 'section': 'FAQ', 'section_group': 'faq'},
+                score=0.7,
+            ),
+        ]
+    })()
+
+    chunks = service._collect_relevant_context(
+        query='Какое давление у OXF01612?',
+        requested_article='OXF01612',
+        matched_sku=_sku('OXF01612', 'диаметр(мм х дюйм) 16х1/2'),
     )
 
-    assert 'OXS00016' in answer
-    assert 'длина: 24 мм' in answer
-    assert 'наружный диаметр' in answer
+    assert len(chunks) == 1
+    assert chunks[0].metadata['doc_id'] == 'ondo_axial'
 
 
-def test_format_pipe_compatibility_answer_rejects_unlisted_wall_thickness():
-    chunk = RetrievedChunk(
-        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
-        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
-        score=0.5,
-    )
+def test_answer_returns_no_data_without_internet(monkeypatch):
+    monkeypatch.setattr('app.services.answer_service.save_chat_request', lambda **k: None)
+    monkeypatch.setattr('app.services.answer_service.save_knowledge_gap', lambda **k: None)
+    monkeypatch.setattr('app.services.answer_service.get_current_index_versions', lambda: {})
 
-    answer = AnswerService._format_pipe_compatibility_answer('гильза встанет в трубу 16x2,0?', [chunk])
+    service = AnswerService.__new__(AnswerService)
+    service.sku = SkuIndex({})
+    service.kits = KitIndex({})
+    service.rag = type('R', (), {'available': True, 'search': lambda self, q: []})()
+    service.docs = type('D', (), {'search': lambda self, *a, **k: []})()
+    service.llm = type('L', (), {'chat': lambda self, *a, **k: 'unused'})()
+    service.memory = type('M', (), {
+        'ensure_session': lambda self, sid: sid or 's1',
+        'ensure_conversation': lambda self, sid, cid=None: cid or sid,
+        'get_state': lambda self, *a, **k: {},
+        'append_message': lambda self, *a, **k: None,
+        'update_state': lambda self, *a, **k: None,
+    })()
 
-    assert '16 мм' in answer
-    assert '2,2 мм' in answer
-    assert '16x2,0' in answer
-    assert 'подтверждения в базе нет' in answer
+    resp = asyncio.run(service.answer('Что известно про неизвестный товар?'))
 
-
-def test_format_pipe_compatibility_answer_rejects_inner_diameter_question():
-    chunk = RetrievedChunk(
-        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
-        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
-        score=0.5,
-    )
-
-    answer = AnswerService._format_pipe_compatibility_answer(
-        'тройник аксиальный 16x16x16, трубка кондиционера с внутренним диаметром 15,7мм будет плотно сидеть?',
-        [chunk],
-    )
-
-    assert 'наружным диаметром 16 мм' in answer
-    assert '2,2 мм' in answer
-    assert '15,7 мм' in answer
-    assert 'совместимость подтвердить нельзя' in answer
-
-
-def test_format_pipe_compatibility_answer_prefers_16x22_over_16x26():
-    chunk = RetrievedChunk(
-        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
-        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
-        score=0.5,
-    )
-
-    answer = AnswerService._format_pipe_compatibility_answer(
-        'тройник под трубу 16x2.2 или 16x2.6?',
-        [chunk],
-    )
-
-    assert 'подтверждена труба 16x2,2 мм' in answer
-    assert '16x2,6 мм' in answer
-    assert 'подтверждения в базе нет' in answer
-
-
-def test_format_pipe_compatibility_answer_prefers_16x22_over_16x20():
-    chunk = RetrievedChunk(
-        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
-        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
-        score=0.5,
-    )
-
-    answer = AnswerService._format_pipe_compatibility_answer(
-        'Для какой трубы 16 со стенкой 2,0 или 2,2?',
-        [chunk],
-    )
-
-    assert 'подтверждена труба 16x2,2 мм' in answer
-    assert '16x2,0 мм' in answer
-    assert 'подтверждения в базе нет' in answer
-
-
-def test_format_pipe_compatibility_answer_explains_inner_diameter_is_not_spec():
-    chunk = RetrievedChunk(
-        text='Фитинги аксиальные совместимы с полимерными трубами: Наружный диаметр трубы 16 мм с толщиной стенки 2,2мм и 20 мм с толщиной стенки 2,8 мм',
-        metadata={'source_file': 'ondo_axial_fittings_rag_ready.txt'},
-        score=0.5,
-    )
-
-    answer = AnswerService._format_pipe_compatibility_answer(
-        'к нему труба с каким внутренним диаметром подойдет?',
-        [chunk],
-    )
-
-    assert 'не по внутреннему диаметру' in answer
-    assert '16x2,2 мм' in answer
-
-
-def test_format_known_or_missing_spec_answers_from_real_questions():
-    chunk = RetrievedChunk(
-        text=(
-            'TECHNICAL SPECIFICATIONS\n'
-            '- Номинальное давление: 1.6 МПа\n'
-            'MATERIALS\n'
-            '- Корпус фитингов: горячештампованная латунь\n'
-            'CONNECTIONS\n'
-            '- Тип резьбы: трубная\n'
-            'DESCRIPTION\n'
-            '- Конструкция соединения не заужает внутренний диаметр трубопровода.\n'
-            'FAQ\n'
-            'Работы по монтажу аксиальных фитингов должны выполняться с помощью комплекта специального инструмента: ручного; электрического.'
-        ),
-        metadata={'manufacturer': 'Sabie S.r.l.', 'country': 'Italy'},
-        score=0.6,
-    )
-
-    assert 'Sabie S.r.l.' in AnswerService._format_known_or_missing_spec_answer('Кто производитель?', [chunk])
-    assert 'вес одной штуки не указан' in AnswerService._format_known_or_missing_spec_answer('А какой вес у одной шт?', [chunk])
-    assert 'шаг резьбы' in AnswerService._format_known_or_missing_spec_answer('Какой шаг резьбы: 1,25 или 1,5?', [chunk])
-    assert 'горячештампованная латунь' in AnswerService._format_known_or_missing_spec_answer('Марка используемой латуни?', [chunk])
-    assert 'проходного диаметра' in AnswerService._format_known_or_missing_spec_answer('Какой внутренний проходной диаметр?', [chunk])
-    assert 'примерно 16 бар' in AnswerService._format_known_or_missing_spec_answer('Рабочее давление всего 1,6 Мпа?', [chunk])
-    assert 'специальным инструментом' in AnswerService._format_known_or_missing_spec_answer('Муфты монтировать каким инструментом или можно руками?', [chunk])
-
-
-def test_russian_composition_markers():
-    assert extract_slots('Что входит в набор OXF01612K10G?').asks_composition
-    assert extract_slots('Какая комплектация OXF01612K10G?').asks_composition
-
-
-def test_matches_item_type_with_russian_plural_form():
-    assert AnswerService._matches_item_type('гильза', 'гильзы аксиальные')
-    assert AnswerService._matches_item_type('муфта', 'муфты аксиальные')
-    assert not AnswerService._matches_item_type('гильза', 'муфты аксиальные')
+    assert resp['used_web_search'] is False
+    assert resp['web_results'] == []
+    assert 'нет данных' in resp['answer'].lower()
