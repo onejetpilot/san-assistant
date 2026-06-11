@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 from pydantic import BaseModel, Field
-from app.utils.article_normalizer import normalize_article
+from app.utils.article_normalizer import normalize_article, normalize_sku
 
 META_FIELDS = ['DOCUMENT', 'DOC_ID', 'PRODUCT', 'CATEGORY', 'BRAND', 'MODEL', 'MANUFACTURER', 'COUNTRY', 'ALIASES']
 SECTIONS = [
@@ -17,6 +17,7 @@ SECTIONS = [
 class ArticleItem(BaseModel):
     original: str
     normalized: str
+    base_sku: str
 
 
 class RagSection(BaseModel):
@@ -37,6 +38,7 @@ class ParsedRagDocument(BaseModel):
     aliases: list[str] = Field(default_factory=list)
     sections: dict[str, RagSection] = Field(default_factory=dict)
     articles: list[ArticleItem] = Field(default_factory=list)
+    base_skus: list[str] = Field(default_factory=list)
 
 
 def _extract_articles(text: str) -> list[str]:
@@ -45,8 +47,9 @@ def _extract_articles(text: str) -> list[str]:
         token = line.strip().lstrip('-').strip()
         if not token:
             continue
-        if '—' in token:
-            token = token.split('—', 1)[0].strip()
+        match = re.match(r'^([A-Za-zА-Яа-я0-9._\-/]+)\s*(?:[-—:]\s*.+)?$', token)
+        if match:
+            token = match.group(1).strip()
         if re.match(r'^[A-Za-z0-9._\-/]+$', token):
             out.append(token)
     return out
@@ -94,7 +97,12 @@ def parse_rag_file(path: str | Path) -> ParsedRagDocument:
     if not articles:
         articles = _extract_articles(sections.get('VARIANTS (АРТИКУЛЫ)', RagSection(name='VARIANTS (АРТИКУЛЫ)')).content)
 
-    article_items = [ArticleItem(original=a, normalized=normalize_article(a)) for a in dict.fromkeys(articles)]
+    article_items = []
+    for article in dict.fromkeys(articles):
+        normalized = normalize_article(article)
+        base_sku = normalize_sku(article).base_article or normalized
+        article_items.append(ArticleItem(original=article, normalized=normalized, base_sku=base_sku))
+    base_skus = list(dict.fromkeys([item.base_sku for item in article_items if item.base_sku]))
 
     aliases = [x.strip() for x in meta.get('ALIASES', '').split(',') if x.strip()]
     return ParsedRagDocument(
@@ -110,4 +118,5 @@ def parse_rag_file(path: str | Path) -> ParsedRagDocument:
         aliases=aliases,
         sections=sections,
         articles=article_items,
+        base_skus=base_skus,
     )

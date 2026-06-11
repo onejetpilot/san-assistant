@@ -187,20 +187,12 @@ class AnswerService:
         sku_result: SkuRecord | None,
         base_sku_result: SkuRecord | None,
     ) -> list[RetrievedChunk]:
-        search_queries = [query]
-        if requested_article:
-            search_queries.append(requested_article)
-        if base_sku_result and base_sku_result.article not in search_queries:
-            search_queries.append(base_sku_result.article)
-        if sku_result and sku_result.product:
-            search_queries.append(f"{sku_result.product} {query}")
-
-        raw_chunks: list[RetrievedChunk] = []
-        for candidate in search_queries[:4]:
-            if not candidate:
-                continue
-            raw_chunks.extend(self.rag.search(candidate) or [])
-
+        search_query = query
+        if requested_article and requested_article not in query:
+            search_query = f"{query} {requested_article}"
+        raw_chunks = self.rag.search(search_query) or []
+        if not raw_chunks and base_sku_result and base_sku_result.article and base_sku_result.article not in search_query:
+            raw_chunks = self.rag.search(f"{query} {base_sku_result.article}") or []
         if not raw_chunks:
             raw_chunks = self._fallback_rag_context(query, sku_result or base_sku_result)
 

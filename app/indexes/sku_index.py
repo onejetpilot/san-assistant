@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel
 
 from app.rag.parser import ParsedRagDocument
-from app.utils.article_normalizer import normalize_article
+from app.utils.article_normalizer import normalize_article, normalize_sku
 
 
 class SkuRecord(BaseModel):
@@ -22,6 +22,7 @@ class SkuRecord(BaseModel):
     related_articles: list[str] = []
     kit_components: list[str] = []
     matched_from: str = 'ARTICLES'
+    base_sku: str = ''
 
 
 class SkuIndex:
@@ -71,6 +72,7 @@ def build_sku_index(docs: list[ParsedRagDocument]) -> SkuIndex:
                 related_articles=[x for x in related if normalize_article(x) != norm][:10],
                 kit_components=kit_components,
                 matched_from='ARTICLES',
+                base_sku=normalize_sku(a.original).base_article or norm,
             ).model_dump()
     return SkuIndex(data)
 
