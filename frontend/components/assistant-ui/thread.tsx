@@ -1,7 +1,7 @@
 'use client';
 
-import { ActionBarPrimitive, ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useThread } from '@assistant-ui/react';
-import { CopyIcon, PlusIcon, RefreshCwIcon, SendIcon, SquareIcon } from 'lucide-react';
+import { ComposerPrimitive, MessagePrimitive, ThreadPrimitive, useThread } from '@assistant-ui/react';
+import { PlusIcon, SendIcon, SquareIcon } from 'lucide-react';
 import { clearConversationId, clearSessionId } from '../../lib/storage';
 import { cn } from '../../lib/utils';
 
@@ -69,27 +69,20 @@ function UserMessage() {
 
 function AssistantMessage() {
   return (
-    <MessagePrimitive.Root className="px-3 py-2 sm:px-4">
-      <div className="max-w-[92%]">
-        <div className="rounded-3xl rounded-bl-lg border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-800 shadow-sm">
-          <MessagePrimitive.Content
-            components={{
-              Text: ({ text }) => <div className="whitespace-pre-wrap break-words">{text}</div>,
-            }}
-          />
+    <MessagePrimitive.Root>
+      <MessagePrimitive.If hasContent>
+        <div className="max-w-[92%] px-3 py-2 sm:px-4">
+          <MessagePrimitive.If hasContent>
+            <div className="rounded-3xl rounded-bl-lg border border-slate-200 bg-white px-4 py-3 text-sm leading-6 text-slate-800 shadow-sm">
+              <MessagePrimitive.Content
+                components={{
+                  Text: ({ text }) => <div className="whitespace-pre-wrap break-words">{text}</div>,
+                }}
+              />
+            </div>
+          </MessagePrimitive.If>
         </div>
-
-        <ActionBarPrimitive.Root className="mt-2 flex items-center gap-2 text-xs text-slate-500">
-          <ActionBarPrimitive.Copy className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 transition hover:border-slate-300 hover:bg-slate-50">
-            <CopyIcon className="h-3.5 w-3.5" />
-            Скопировать
-          </ActionBarPrimitive.Copy>
-          <ActionBarPrimitive.Reload className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-white px-3 py-1.5 transition hover:border-slate-300 hover:bg-slate-50">
-            <RefreshCwIcon className="h-3.5 w-3.5" />
-            Повторить
-          </ActionBarPrimitive.Reload>
-        </ActionBarPrimitive.Root>
-      </div>
+      </MessagePrimitive.If>
     </MessagePrimitive.Root>
   );
 }
