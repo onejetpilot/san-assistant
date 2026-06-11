@@ -148,3 +148,21 @@ def test_marketplace_cases_pass_full_answer_service_flow(marketplace_service):
         assert check_answer(case, resp['answer']) == [], case['id']
         assert any(item['meta'].get('tool') == 'rag_search' for item in resp['retrieval_trace']), case['id']
         assert any(item['meta'].get('tool') == 'product_reasoner' for item in resp['retrieval_trace']), case['id']
+
+
+def test_product_qa_flow_passes_series_context_to_llm(marketplace_service):
+    prompts: list[str] = []
+
+    async def _spy_llm(self, system_prompt: str, user_prompt: str, *args, **kwargs):
+        prompts.append(user_prompt)
+        return 'Можно ориентироваться на общие характеристики серии.'
+
+    marketplace_service.llm.chat = _spy_llm.__get__(marketplace_service.llm, type(marketplace_service.llm))
+    resp = asyncio.run(marketplace_service.answer('Уголок аксиальный 16х1/2 ONDO. Какое рабочее давление горячей воды держит?'))
+
+    assert resp['route']['selected_route'] == 'product_qa_flow'
+    assert prompts
+    prompt = prompts[-1]
+    assert 'Номинальное давление: 1.6 МПа' in prompt
+    assert '+5…+95 °C' in prompt
+    assert 'TECHNICAL SPECIFICATIONS' in prompt

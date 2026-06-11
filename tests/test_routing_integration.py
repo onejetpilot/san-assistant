@@ -78,8 +78,8 @@ def test_article_lookup_uses_sku_not_llm(service):
     assert 'sku_lookup' in resp['tools_used']
     assert resp['retrieval_trace'][0]['meta']['tool'] == 'sku_lookup'
     assert resp['retrieval_trace'][0]['status'] == 'ok'
-    assert 'llm' in resp['tools_used']
-    assert any(item['meta'].get('tool') == 'llm_composer' for item in resp['retrieval_trace'])
+    assert 'llm' not in resp['tools_used']
+    assert not any(item['meta'].get('tool') == 'llm_composer' for item in resp['retrieval_trace'])
 
 
 def test_article_lookup_ignores_dirty_kit_components(service):

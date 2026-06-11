@@ -16,20 +16,11 @@ from app.rag.retriever import RagRetriever, RetrievedChunk
 from app.services.confidence import compute_confidence
 from app.services.conversation_memory import ConversationMemoryService
 from app.services.query_expander import QueryExpander
-from app.services.query_resolver import resolve_query
-from app.services.routing.router import route_query
 from app.services.routing.rag_quality import (
     filter_relevant_chunks,
     has_strong_rag_context,
-    has_weak_rag_context,
-    chunks_for_llm,
-    preferred_section_groups,
     prioritize_chunks,
-    build_no_context_fallback,
-    KB_SYNTHESIS_INTENTS,
 )
-from app.services.routing.observability import log_routing_decision
-from app.services.routing.preprocessor import build_routing_context
 from app.services.slot_extractor import extract_slots
 from app.services.tool_payload import build_tool_payload, empty_results_payload
 from app.storage.repository import save_chat_request, save_knowledge_gap, get_current_index_versions
@@ -38,7 +29,7 @@ from app.utils.text import extract_article_candidate
 from app.utils.timing import now_ms
 from app.web_search.san_team_search import SanTeamSearch
 from app.evaluation.answer_judge import evaluate_answer
-from app.utils.article_normalizer import normalize_article, normalize_sku
+from app.utils.article_normalizer import normalize_sku
 from app.core.logging import get_logger
 
 
@@ -158,13 +149,7 @@ class AnswerService:
             return 'kit_composition_question'
         if article and any(token in q for token in ['что за артикул', 'характеристики артикула', 'как называется товар', 'что за ']):
             return 'article_lookup'
-        if any(token in q for token in ['подойдет', 'подойдёт', 'совместим', 'можно ли', 'какая гильза', 'аналог', 'размер']):
-            return 'compatibility_question'
-        if any(token in q for token in ['стяжк', 'замонол', 'скрыт', 'монтаж']):
-            return 'installation_or_usage_question'
-        if any(token in q for token in ['давлен', 'температур', 'вес', 'длина', 'резьб']):
-            return 'technical_spec_question'
-        return 'product_question'
+        return 'product_qa'
 
     @staticmethod
     def _extract_doc_type(query: str, requested_doc_type: str | None) -> str | None:
@@ -483,6 +468,24 @@ class AnswerService:
 
         return ''
 
+    @classmethod
+    def _deterministic_context_answer(
+        cls,
+        query: str,
+        *,
+        intent: str,
+        rag_results: list[RetrievedChunk],
+        product_evidence,
+    ) -> tuple[str, str]:
+        answer = cls._format_pipe_compatibility_answer(query, rag_results)
+        if answer:
+            return answer, 'deterministic_context_compatibility'
+
+        answer = cls._format_known_or_missing_spec_answer(query, rag_results)
+        if answer:
+            return answer, 'deterministic_context_spec'
+        return '', ''
+
     @staticmethod
     def _matches_item_type(target_type: str, article_type: str) -> bool:
         target = str(target_type or '').strip().lower()
@@ -528,13 +531,16 @@ class AnswerService:
         normalized_sku = normalize_sku(article)
         requested_article = normalized_sku.normalized or None
         intent = self._infer_intent(resolved_query, requested_article)
+        recent_messages_for_llm: list[dict] = []
+        if not requested_article:
+            recent_messages_for_llm = self._history_for_llm(recent, settings.CHAT_HISTORY_FOR_LLM)
         router = {
             'intent': intent,
-            'selected_route': 'minimal_rag_pipeline',
+            'selected_route': 'product_qa_flow',
             'expected_answer_type': 'consultant_answer',
             'confidence': 0.9 if requested_article else 0.7,
-            'reason': 'minimal_pipeline',
-            'tools': [],
+            'reason': 'single_path_document_context',
+            'tools': ['sku_lookup', 'kit_lookup', 'rag_search', 'document_search', 'llm'],
         }
         tools_called: list[str] = []
         empty_results: list[str] = []
@@ -622,7 +628,7 @@ class AnswerService:
         web_results = []
         used_web_search = False
         local_miss = not matched_sku and not doc_results and not has_strong_rag_context(rag_results)
-        should_web_search = settings.ENABLE_WEB_SEARCH and local_miss
+        should_web_search = settings.ENABLE_WEB_SEARCH and local_miss and not requested_article
         if should_web_search:
             tools_called.append('san_team_search')
             web_response = self.web.search(resolved_query)
@@ -638,15 +644,11 @@ class AnswerService:
             used_web_only=used_web_search and not rag_results_strong,
         )
 
-        answer_mode = 'short_answer'
-        if intent in {'installation_or_usage_question', 'installation_question', 'warranty_question'}:
-            answer_mode = 'technical_answer'
-        if intent in {'compatibility_question', 'related_product_question', 'assortment_question', 'technical_spec_question'}:
-            answer_mode = 'technical_answer'
+        answer_mode = 'product_qa'
         if intent == 'document_request':
             answer_mode = 'document_answer'
-        if intent in {'product_question', 'price_or_availability_question'} or ('подоб' in ql and intent != 'knowledge_base_question'):
-            answer_mode = 'selection_answer'
+        elif intent in {'article_lookup', 'kit_composition_question'}:
+            answer_mode = 'exact_lookup'
 
         display_rag = rag_results_strong or rag_results
         sources = [{
@@ -675,55 +677,68 @@ class AnswerService:
         answer = ''
         final_answer_source = 'llm_composed'
         deterministic_reason = ''
-        rag_usable = has_strong_rag_context(rag_results) or (
-            intent in KB_SYNTHESIS_INTENTS and has_weak_rag_context(rag_results)
-        )
-        has_evidence = bool(matched_sku or kit_from_global or documents or rag_usable or web_results or product_evidence.decision or product_evidence.answer_hints)
+        has_evidence = bool(matched_sku or kit_from_global or documents or display_rag or web_results or product_evidence.answer_hints)
 
-        try:
-            rag_for_prompt = chunks_for_llm(rag_results, intent, slots)
-            tools_called.append('llm')
-            prompt = build_user_prompt({
-                'original_query': query,
-                'resolved_query': resolved_query,
-                'conversation_state': {},
-                'recent_messages': [],
-                'router_decision': router,
-                'sku_result': matched_sku.model_dump() if matched_sku else None,
-                'product_evidence': product_evidence.model_dump(),
-                'product_cards': [],
-                'rag_chunks': [self._sanitize_context(r.text) for r in rag_for_prompt[:5]],
-                'document_results': documents,
-                'web_results': web_results,
-                'confidence': conf,
-                'answer_mode': answer_mode,
-                'answer_style': answer_style,
-            })
-            self._log_prompt_preview(request_id, SYSTEM_PROMPT, prompt)
-            answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
-            answer_warnings = self.reasoner.validate_answer_against_context(answer, product_evidence)
-            if answer_warnings:
-                product_evidence.warnings.extend(answer_warnings)
-            final_answer_source = 'llm_composed'
-        except Exception:
-            fallback_used = True
-            composed = self.reasoner.compose_deterministic_answer(product_evidence, sku_result=matched_sku)
-            if composed:
-                answer = composed
-                final_answer_source = 'evidence_fallback'
-            elif intent == 'document_request' and documents:
-                answer = 'Найдены документы: ' + '; '.join([f"{d['title']} ({d['public_url']})" for d in documents[:5]])
-                final_answer_source = 'document_fallback'
-            elif matched_sku:
-                answer = f"Артикул {matched_sku.article}: {matched_sku.product}, бренд {matched_sku.brand}, категория {matched_sku.category}."
-                final_answer_source = 'sku_fallback'
-            elif has_evidence:
-                answer = 'Не подтверждено. В найденном контексте недостаточно прямых данных для уверенного ответа.'
-                final_answer_source = 'evidence_soft_fallback'
-            else:
-                answer = build_no_context_fallback(intent)
-                final_answer_source = 'fallback'
-                tools_called.append('fallback')
+        if intent == 'document_request' and documents:
+            answer = 'Найдены документы: ' + '; '.join([f"{d['title']} ({d['public_url']})" for d in documents[:5]])
+            final_answer_source = 'document_direct'
+            deterministic_reason = 'document_request'
+        elif intent == 'article_lookup' and matched_sku:
+            answer = self._format_sku_answer(matched_sku)
+            final_answer_source = 'sku_direct'
+            deterministic_reason = 'article_lookup'
+        elif intent == 'kit_composition_question' and kit_from_global:
+            answer = self._format_kit_answer(kit_from_global, matched_sku)
+            final_answer_source = 'kit_direct'
+            deterministic_reason = 'kit_composition'
+        else:
+            try:
+                tools_called.append('llm')
+                prompt = build_user_prompt({
+                    'original_query': query,
+                    'resolved_query': resolved_query,
+                    'conversation_state': {} if requested_article else state,
+                    'recent_messages': recent_messages_for_llm,
+                    'router_decision': router,
+                    'sku_result': matched_sku.model_dump() if matched_sku else None,
+                    'product_evidence': product_evidence.model_dump(),
+                    'product_cards': [],
+                    'rag_chunks': [self._sanitize_context(r.text) for r in display_rag[:8]],
+                    'document_results': documents,
+                    'web_results': web_results,
+                    'confidence': conf,
+                    'answer_mode': answer_mode,
+                    'answer_style': answer_style,
+                })
+                self._log_prompt_preview(request_id, SYSTEM_PROMPT, prompt)
+                answer = await self.llm.chat(SYSTEM_PROMPT, prompt)
+                answer_warnings = self.reasoner.validate_answer_against_context(answer, product_evidence)
+                if answer_warnings:
+                    product_evidence.warnings.extend(answer_warnings)
+                final_answer_source = 'llm_composed'
+            except Exception:
+                fallback_used = True
+                if intent == 'document_request' and documents:
+                    answer = 'Найдены документы: ' + '; '.join([f"{d['title']} ({d['public_url']})" for d in documents[:5]])
+                    final_answer_source = 'document_fallback'
+                elif matched_sku and intent == 'article_lookup':
+                    answer = self._format_sku_answer(matched_sku)
+                    final_answer_source = 'sku_fallback'
+                elif matched_sku and intent == 'kit_composition_question' and kit_from_global:
+                    answer = self._format_kit_answer(kit_from_global, matched_sku)
+                    final_answer_source = 'kit_fallback'
+                elif has_evidence:
+                    composed = self.reasoner.compose_deterministic_answer(product_evidence, sku_result=matched_sku)
+                    if composed:
+                        answer = composed
+                        final_answer_source = 'evidence_fallback'
+                    else:
+                        answer = 'Не подтверждено. В найденном контексте недостаточно прямых данных для уверенного ответа.'
+                        final_answer_source = 'evidence_soft_fallback'
+                else:
+                    answer = 'В базе знаний не нашёл точной информации по этому вопросу.'
+                    final_answer_source = 'fallback'
+                    tools_called.append('fallback')
 
         if answer_style == 'short' and answer:
             parts = re.split(r'(?<=[.!?])\s+', answer.strip())

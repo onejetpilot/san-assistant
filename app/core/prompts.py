@@ -17,42 +17,6 @@ SYSTEM_PROMPT = """Ты — консультант интернет-магази
 - Ответ должен быть 1–3 коротких абзаца без длинных списков.
 """
 
-
-def _format_history(messages: list[dict]) -> str:
-    if not messages:
-        return 'NO_HISTORY'
-    lines = []
-    for idx, item in enumerate(messages, start=1):
-        role = item.get('role', 'unknown')
-        content = str(item.get('content', '')).strip()
-        if not content:
-            continue
-        lines.append(f"{idx}. {role}: {content}")
-    return '\n'.join(lines) if lines else 'NO_HISTORY'
-
-
-def _format_state(state: dict) -> str:
-    fields = [
-        ('current_article', 'Артикул'),
-        ('current_product', 'Товар'),
-        ('current_brand', 'Бренд'),
-        ('current_category', 'Категория'),
-    ]
-    lines = [f"- {label}: {state.get(key)}" for key, label in fields if state.get(key)]
-    return '\n'.join(lines) if lines else 'NO_STATE'
-
-
-def _format_router(decision: dict) -> str:
-    if not decision:
-        return 'NO_ROUTE'
-    fields = ['intent', 'selected_route', 'expected_answer_type', 'confidence', 'reason']
-    lines = [f"- {key}: {decision.get(key)}" for key in fields if decision.get(key) is not None]
-    tools = decision.get('tools') or decision.get('tools_to_call')
-    if tools:
-        lines.append(f"- tools: {', '.join(map(str, tools))}")
-    return '\n'.join(lines) if lines else 'NO_ROUTE'
-
-
 def _format_sku(sku: dict | None) -> str:
     if not sku:
         return 'NO_SKU'
@@ -138,11 +102,7 @@ def build_user_prompt(payload: dict) -> str:
         f"Запрос пользователя:\n{payload.get('original_query')}\n\n"
         f"Запрос для обработки:\n{payload.get('resolved_query')}\n\n"
         f"Режим ответа: {payload.get('answer_mode')}\n"
-        f"Предпочтение длины: {payload.get('answer_style')}\n"
-        f"Уверенность retrieval: {payload.get('confidence')}\n\n"
-        f"Классификация запроса:\n{_format_router(payload.get('router_decision') or {})}\n\n"
-        f"Состояние диалога:\n{_format_state(payload.get('conversation_state') or {})}\n\n"
-        f"Краткая история:\n{_format_history(payload.get('recent_messages') or [])}\n\n"
+        f"Предпочтение длины: {payload.get('answer_style')}\n\n"
         f"Точное совпадение SKU:\n{_format_sku(payload.get('sku_result'))}\n\n"
         f"PRODUCT_EVIDENCE:\n{_format_product_evidence(payload.get('product_evidence'))}\n\n"
         f"RAG-контекст для фактов:\n{rag_block}\n"
@@ -150,11 +110,10 @@ def build_user_prompt(payload: dict) -> str:
         f"Web результаты:\n{_format_web_results(payload.get('web_results') or [])}\n\n"
         "Инструкция для ответа:\n"
         "- Используй только PRODUCT_EVIDENCE, SKU, RAG, Documents и Web как источники фактов.\n"
-        "- Если есть точный или базовый артикул, опирайся на него как на источник фактов, но не цитируй сырой индекс.\n"
+        "- Считай, что RAG-контекст уже собран из нужного товарного документа и его ключевых секций.\n"
         "- Сначала дай прямой вывод: подходит / не подходит / можно / нельзя / не подтверждено / в документации не указано.\n"
         "- Потом кратко объясни вывод на основе размеров, подключений, ограничений, общих характеристик серии или найденного документа.\n"
         "- Если найден документ, дай название и ссылку.\n"
         "- Если совместимость не подтверждена, так и скажи, не додумывай применение.\n"
-        "- Не используй историю диалога для нового артикула, если в текущем вопросе указан другой SKU.\n"
-        "- Не упоминай роутинг, инструменты, confidence и внутреннее устройство бота."
+        "- Не цитируй внутренние правила, инструменты, confidence или устройство бота."
     )

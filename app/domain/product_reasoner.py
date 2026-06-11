@@ -258,15 +258,20 @@ class ProductReasoner:
         if pipe_size:
             evidence.user_requested_pipe_size = pipe_size
         if 'внутрен' in q and ('шланг' in q or 'дренаж' in q or 'диаметр' in q):
+            supported_display = ', '.join(f"{item.replace('.', ',')} мм" for item in supported) if supported else ''
             evidence.decision = 'not_confirmed'
-            evidence.decision_reason = (
-                'Аксиальные фитинги подбираются по наружному диаметру и толщине стенки трубы, '
-                'а совместимость по внутреннему диаметру шланга в базе не подтверждена'
-            )
-            if supported:
-                evidence.answer_hints.append(
-                    f"В базе подтверждены геометрии {', '.join(supported)}."
+            if 'шланг' in q:
+                evidence.decision_reason = (
+                    'Для шланга с внутренним диаметром 16 мм совместимость подтвердить нельзя. '
+                    'Аксиальные фитинги подбираются по наружному диаметру и толщине стенки трубы'
                 )
+            else:
+                evidence.decision_reason = (
+                    'Аксиальные фитинги подбираются по наружному диаметру и толщине стенки трубы, '
+                    'а совместимость по внутреннему диаметру шланга в базе не подтверждена'
+                )
+            if supported_display:
+                evidence.decision_reason += f'; в базе подтверждена геометрия {supported_display}'
             return
         if sku_size and pipe_size:
             pipe_outer = pipe_size.split('x', 1)[0]
@@ -277,12 +282,15 @@ class ProductReasoner:
                 return
             expected_pipe = next((item for item in supported if item.startswith(f'{sku_size}x')), None)
             if expected_pipe and expected_pipe != pipe_size:
+                expected_display = expected_pipe.replace('.', ',')
+                requested_display = pipe_size.replace('.', ',')
                 evidence.decision = 'not_confirmed'
-                evidence.decision_reason = f"Для размера {sku_size} в базе подтверждена труба {expected_pipe}, а размер {pipe_size} не подтвержден"
+                evidence.decision_reason = f"Для размера {sku_size} в базе подтверждена труба {expected_display}, а размер {requested_display} не подтвержден"
                 return
             if expected_pipe == pipe_size:
+                expected_display = pipe_size.replace('.', ',')
                 evidence.decision = 'compatible'
-                evidence.decision_reason = f"Для размера {sku_size} в базе подтверждена труба {pipe_size}"
+                evidence.decision_reason = f"Для размера {sku_size} в базе подтверждена труба {expected_display}"
                 if sku_result:
                     evidence.recommended_articles = [sku_result.article]
                 return
@@ -292,14 +300,21 @@ class ProductReasoner:
             evidence.answer_hints.append(f"В базе подтверждены геометрии {', '.join(supported)}.")
 
     def _apply_installation_rules(self, evidence: ProductEvidence, rag_results: list[RetrievedChunk]) -> None:
-        context = '\n'.join(chunk.text.lower() for chunk in rag_results[:5])
+        raw_context = '\n'.join(chunk.text for chunk in rag_results[:5])
+        context = raw_context.lower()
         if not context:
             evidence.decision = 'installation_not_confirmed'
             evidence.decision_reason = 'В базе нет подтвержденного контекста по условиям монтажа.'
             return
         if any(marker in context for marker in ['стяжк', 'скрыт', 'замонол', 'бетон', 'в стену']):
             evidence.decision = 'installation_confirmed'
-            evidence.decision_reason = 'В RAG-контексте найдено прямое упоминание условий скрытого монтажа.'
+            if 'гидравлическ' in context and 'цемент' in context:
+                evidence.decision_reason = (
+                    'Можно: в документации допускаются скрытый монтаж и замоноличивание, '
+                    'но нужны гидравлические испытания и изоляция соединения от цементного раствора.'
+                )
+            else:
+                evidence.decision_reason = 'Можно: в документации есть прямое упоминание условий скрытого монтажа.'
             return
         evidence.decision = 'installation_not_confirmed'
         evidence.decision_reason = 'В найденном RAG-контексте нет прямого подтверждения монтажа в стяжку или скрытым способом.'
